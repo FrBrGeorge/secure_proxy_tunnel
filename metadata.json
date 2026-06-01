@@ -1,0 +1,6 @@
+{
+  "name": "Secure Proxy Tunnel Packager",
+  "description": "A python package and manager with local HTTP proxy and remote secure TCP relay, providing visual logs, configurations, and diagnostics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

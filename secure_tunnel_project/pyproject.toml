@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "securetunnel"
+version = "1.0.0"
+authors = [
+    { name = "Developer", email = "developer@example.com" }
+]
+description = "A lightweight secure TCP proxy tunnel and relay system using python asyncio"
+readme = "README.md"
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Topic :: System :: Networking",
+]
+dependencies = []
+
+[project.scripts]
+securetunnel-local = "securetunnel.local_proxy:main"
+securetunnel-relay = "securetunnel.remote_relay:main"
