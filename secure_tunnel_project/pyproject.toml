@@ -11,9 +11,12 @@ authors = [
 description = "A lightweight secure TCP proxy tunnel and relay system using python asyncio"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.7"
+requires-python = ">=3.11, <3.14"
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Operating System :: OS Independent",
     "Topic :: System :: Networking",
  ]
