@@ -134,5 +134,54 @@ class TestTunnelInteraction(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b"Hello Target", response)
         self.assertIn(b"mockhost", self.target_received_data[0])
 
+    async def test_socks5_proxy_tunneling(self):
+        """
+        Verify SOCKS5 tunnel handshake and subsequent raw TCP data transfer:
+        1. SOCKS5 Greeting: client sends self-announcement \x05\x01\x00 (version 5, 1 auth method: No Auth)
+        2. SOCKS5 Server Response: server sends selected authentication method \x05\x00
+        3. SOCKS5 Connection Request: client sends \x05\x01\x00\x01 + 4 bytes IPv4 + 2 bytes port (CONNECT)
+        4. SOCKS5 Server Connection Response: server sends \x05\x00\x00\x01\x00\x00\x00\x00\x00\x00
+        5. Verify that raw bytes forward cleanly to the target server.
+        """
+        reader, writer = await asyncio.open_connection("127.0.0.1", self.proxy_port)
+        
+        # 1. Greeting
+        writer.write(b"\x05\x01\x00")
+        await writer.drain()
+        
+        # 2. Server Response
+        greet_resp = await reader.readexactly(2)
+        self.assertEqual(greet_resp, b"\x05\x00")
+        
+        # 3. Connection Request (CONNECT IPv4 target_ip target_port)
+        ip_parts = [int(p) for p in "127.0.0.1".split(".")]
+        ip_bytes = bytes(ip_parts)
+        port_bytes = self.target_port.to_bytes(2, "big")
+        
+        conn_req = b"\x05\x01\x00\x01" + ip_bytes + port_bytes
+        writer.write(conn_req)
+        await writer.drain()
+        
+        # 4. Server Connection Response
+        conn_resp = await reader.readexactly(10)
+        self.assertEqual(conn_resp[0], 5)   # SOCKS5 version
+        self.assertEqual(conn_resp[1], 0)   # Reply code: success
+        
+        # 5. Send raw data over the decoupled SOCKS5 pipeline
+        writer.write(b"GET /socks-test HTTP/1.1\r\nHost: socks-host\r\n\r\n")
+        await writer.drain()
+        
+        # Read back response
+        response = await reader.read(4096)
+        writer.close()
+        await writer.wait_closed()
+        
+        self.assertIn(b"HTTP/1.1 200 OK", response)
+        self.assertIn(b"Hello Target", response)
+        self.assertTrue(len(self.target_received_data) > 0)
+        # Search for domain inside target received data records
+        received_data_str = b"".join(self.target_received_data)
+        self.assertIn(b"socks-host", received_data_str)
+
 if __name__ == "__main__":
     unittest.main()

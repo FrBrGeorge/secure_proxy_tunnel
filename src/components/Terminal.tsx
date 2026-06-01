@@ -100,7 +100,7 @@ export default function Terminal({ proxyState, relayState, onClearLogs }: Termin
         {/* local_proxy console */}
         <div className="flex flex-col rounded-lg border border-slate-800/80 bg-slate-950/90 shadow-inner">
           <div className="flex items-center justify-between border-b border-slate-900 bg-slate-900/50 px-4 py-2 font-mono text-[10px] text-slate-400 font-bold tracking-wide uppercase">
-            <span>💻 securetunnel-local (HTTP Proxy)</span>
+            <span>💻 securetunnel-local (HTTP & SOCKS5 Dual Proxy)</span>
             {proxyState?.status === "running" ? (
               <span className="flex items-center gap-1 text-emerald-400 text-[9px] animate-pulse">● LIVE</span>
             ) : (

@@ -44,7 +44,7 @@ export default function PythonTestRunner({ onRunPythonTests }: PythonTestRunnerP
       </div>
 
       <p className="text-xs text-slate-400 leading-relaxed mb-4">
-        Validate the complete Python package architecture locally. Runs full-loop server/client integrations including self-signed certificate creation, dynamic port binding, header handshakes, and SSL stream piping.
+        Validate the complete Python package architecture locally. Runs full-loop server/client integrations including self-signed certificate creation, dual SOCKS5/HTTP protocol auto-detection, header handshakes, and SSL stream piping.
       </p>
 
       <button
@@ -69,8 +69,8 @@ export default function PythonTestRunner({ onRunPythonTests }: PythonTestRunnerP
               <>
                 <CheckCircle2 className="h-5 w-5 flex-shrink-0" />
                 <div>
-                  <h4 className="text-xs font-bold font-mono">UT-01 & UT-02 SUCCESSFUL</h4>
-                  <p className="text-[11px] leading-tight text-emerald-500/80 mt-0.5">TLS Tunnel and GET proxy conduits validated perfectly.</p>
+                  <h4 className="text-xs font-bold font-mono">UT-01, UT-02 & UT-03 SUCCESSFUL</h4>
+                  <p className="text-[11px] leading-tight text-emerald-500/80 mt-0.5">TLS Tunnel, GET proxy, and SOCKS5 conduits validated perfectly.</p>
                 </div>
               </>
             ) : (
