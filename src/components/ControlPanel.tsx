@@ -1,4 +1,4 @@
-import { Play, Square, RotateCw, Settings, PortSignaling } from "lucide-react";
+import { Play, Square, RotateCw, Settings } from "lucide-react";
 import { useState } from "react";
 import { ProxySystemStatus } from "../types";
 

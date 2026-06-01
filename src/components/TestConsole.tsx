@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { Globe, ArrowRight, Gauge, FileCode, Check, Copy } from "lucide-react";
 import { TunnelTestResult } from "../types";
 

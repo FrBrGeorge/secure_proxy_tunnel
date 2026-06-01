@@ -26,4 +26,6 @@ export interface PackageFiles {
   "securetunnel/remote_relay.py": string;
   "LICENSE": string;
   "tests/test_interaction.py": string;
+  ".github/workflows/ci.yml"?: string;
+  ".github/workflows/release.yml"?: string;
 }

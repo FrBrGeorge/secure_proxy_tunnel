@@ -33,20 +33,26 @@ export default function CodeViewer({ files, isLoading }: CodeViewerProps) {
     "securetunnel/local_proxy.py",
     "securetunnel/remote_relay.py",
     "tests/test_interaction.py",
+    ".github/workflows/ci.yml",
+    ".github/workflows/release.yml",
     "README.md",
     "LICENSE"
   ];
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(files[selectedFile]);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    const fileContent = files[selectedFile];
+    if (fileContent) {
+      navigator.clipboard.writeText(fileContent);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
   };
 
   const getLanguageTag = (filepath: string) => {
     if (filepath.endsWith(".py")) return "Python";
     if (filepath.endsWith(".toml")) return "TOML";
     if (filepath.endsWith(".md")) return "Markdown";
+    if (filepath.endsWith(".yml") || filepath.endsWith(".yaml")) return "YAML";
     return "Plaintext";
   };
 

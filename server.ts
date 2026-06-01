@@ -400,13 +400,24 @@ app.get("/api/proxy/files", (req, res) => {
     const license = fs.readFileSync(path.join(root, "LICENSE"), "utf-8");
     const interactionTest = fs.readFileSync(path.join(root, "tests", "test_interaction.py"), "utf-8");
 
+    let ciWf = "";
+    let releaseWf = "";
+    try {
+      ciWf = fs.readFileSync(path.join(process.cwd(), ".github", "workflows", "ci.yml"), "utf-8");
+    } catch {}
+    try {
+      releaseWf = fs.readFileSync(path.join(process.cwd(), ".github", "workflows", "release.yml"), "utf-8");
+    } catch {}
+
     res.json({
       "pyproject.toml": pyproject,
       "README.md": readme,
       "securetunnel/local_proxy.py": localProxy,
       "securetunnel/remote_relay.py": remoteRelay,
       "LICENSE": license,
-      "tests/test_interaction.py": interactionTest
+      "tests/test_interaction.py": interactionTest,
+      ".github/workflows/ci.yml": ciWf,
+      ".github/workflows/release.yml": releaseWf
     });
   } catch (err: any) {
     res.status(500).json({ error: "Failed to read files of proxy: " + err.message });
