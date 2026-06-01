@@ -32,7 +32,9 @@ export default function CodeViewer({ files, isLoading }: CodeViewerProps) {
     "pyproject.toml",
     "securetunnel/local_proxy.py",
     "securetunnel/remote_relay.py",
-    "README.md"
+    "tests/test_interaction.py",
+    "README.md",
+    "LICENSE"
   ];
 
   const handleCopy = () => {

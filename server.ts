@@ -356,7 +356,7 @@ app.get("/api/proxy/download-zip", (req, res) => {
 
   // Construct zip using standard shell commands
   const projectRoot = process.cwd();
-  const makeZipCmd = `cd "${path.join(projectRoot, "secure_tunnel_project")}" && zip -r "${zipPath}" securetunnel/ pyproject.toml README.md`;
+  const makeZipCmd = `cd "${path.join(projectRoot, "secure_tunnel_project")}" && zip -r "${zipPath}" securetunnel/ tests/ pyproject.toml README.md LICENSE`;
 
   exec(makeZipCmd, (err, stdout, stderr) => {
     if (err) {
@@ -372,6 +372,23 @@ app.get("/api/proxy/download-zip", (req, res) => {
   });
 });
 
+// Endpoint: Run Python automated integration tests suite
+app.post("/api/proxy/run-python-tests", (req, res) => {
+  const projectRoot = process.cwd();
+  const testsDir = path.join(projectRoot, "secure_tunnel_project");
+  // Run unittest inside the package context
+  const testCmd = `cd "${testsDir}" && ${pythonCmd} -m unittest discover -s tests -v`;
+  
+  exec(testCmd, { timeout: 15000 }, (error, stdout, stderr) => {
+    res.json({
+      success: !error,
+      stdout,
+      stderr: stderr || "",
+      error: error ? error.message : null
+    });
+  });
+});
+
 // Endpoint: Read and serve Python files directly to display in a code viewer
 app.get("/api/proxy/files", (req, res) => {
   const root = path.join(process.cwd(), "secure_tunnel_project");
@@ -380,12 +397,16 @@ app.get("/api/proxy/files", (req, res) => {
     const readme = fs.readFileSync(path.join(root, "README.md"), "utf-8");
     const localProxy = fs.readFileSync(path.join(root, "securetunnel", "local_proxy.py"), "utf-8");
     const remoteRelay = fs.readFileSync(path.join(root, "securetunnel", "remote_relay.py"), "utf-8");
+    const license = fs.readFileSync(path.join(root, "LICENSE"), "utf-8");
+    const interactionTest = fs.readFileSync(path.join(root, "tests", "test_interaction.py"), "utf-8");
 
     res.json({
       "pyproject.toml": pyproject,
       "README.md": readme,
       "securetunnel/local_proxy.py": localProxy,
-      "securetunnel/remote_relay.py": remoteRelay
+      "securetunnel/remote_relay.py": remoteRelay,
+      "LICENSE": license,
+      "tests/test_interaction.py": interactionTest
     });
   } catch (err: any) {
     res.status(500).json({ error: "Failed to read files of proxy: " + err.message });

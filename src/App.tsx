@@ -13,6 +13,7 @@ import ControlPanel from "./components/ControlPanel";
 import TestConsole from "./components/TestConsole";
 import CodeViewer from "./components/CodeViewer";
 import Terminal from "./components/Terminal";
+import PythonTestRunner from "./components/PythonTestRunner";
 
 export default function App() {
   const [status, setStatus] = useState<ProxySystemStatus | null>(null);
@@ -101,6 +102,14 @@ export default function App() {
     }, 2500);
   };
 
+  // 6. Run Python automated integration tests suite
+  const handleRunPythonTests = async () => {
+    const res = await fetch("/api/proxy/run-python-tests", {
+      method: "POST"
+    });
+    return await res.json();
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 font-sans text-slate-100" id="app_root">
       {/* Complete visual Navbar */}
@@ -126,6 +135,16 @@ export default function App() {
                 status={status}
                 onControlAction={handleControlAction}
                 isProcessing={isProcessing}
+              />
+            </motion.div>
+
+            <motion.div
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4, delay: 0.05 }}
+            >
+              <PythonTestRunner
+                onRunPythonTests={handleRunPythonTests}
               />
             </motion.div>
 

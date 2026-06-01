@@ -24,4 +24,6 @@ export interface PackageFiles {
   "README.md": string;
   "securetunnel/local_proxy.py": string;
   "securetunnel/remote_relay.py": string;
+  "LICENSE": string;
+  "tests/test_interaction.py": string;
 }
