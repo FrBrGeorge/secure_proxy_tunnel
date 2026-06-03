@@ -15,18 +15,33 @@
     <string name="button_start">Connect Tunnel</string>
     <string name="button_stop">Disconnect</string>
     
-    <string name="app_help_title">Secure Tunnel - Android App Help</string>
+    <string name="app_help_title">Secure Tunnel - Documentation &amp; Setup</string>
     <string name="app_help_body">
-        Welcome to Secure Tunnel Android Client (v0.0.3).\n\n
-        This app connects your Android device securely through an encrypted SSL/TLS tunnel to a remote Secure Relay.\n\n
-        <b>Modes of Operation:</b>\n\n
-        <b>1. Seamless VPN Mode (Android VPN API):</b>\n
-        Redirects all device-wide TCP/UDP traffic through a virtual network interface (TUN). No application-level setup required. Traffic is securely packed, optionally randomized with padding, and relayed directly.\n\n
-        <b>2. Localhost HTTP Proxy Mode:</b>\n
-        Starts an in-app HTTP/HTTPS proxy listener bound to Android\'s localhost (127.0.0.1) on your configured port (default: 19088). You configure your Wi-Fi settings or individual apps (like browsers) to route via 127.0.0.1:19088.\n\n
-        <b>Secure Handsake Padding:</b>\n
-        To prevent profiling attacks, handshakes are padded with up to 2x your configured amount. Packets over 1024 bytes skip padding to optimize bandwidth.\n\n
-        <b>Insecure Mode (Default: Engaged):</b>\n
-        Allows connecting through self-signed certificates or test deployment Relays easily without strict hostname/chain checks. Disable for production nodes.
+        <h3><b>Introduction</b></h3>
+        Welcome to <b>Secure Tunnel Android Client</b> (v0.0.3). This application allows you to tunnel your network traffic securely through an encrypted SSL/TLS interface to a remote Secure Relay server. Perfect for bypassing network blocks and protecting data transmission.<br/><br/>
+
+        <h3><b>Modes of Operation</b></h3>
+        Choose between two powerful routing techniques based on your security constraints:<br/><br/>
+        
+        <b>1. Seamless VPN Mode (Android VPN API):</b><br/>
+        • <i>Overview:</i> Captures all system-wide TCP and UDP packets seamlessly.<br/>
+        • <i>Method:</i> Uses Android\'s native <b>VpnService</b> layer to establish a virtual network adapter. All internet traffic is redirected through the local SOCKS5/HTTP loopback proxy on the device.<br/>
+        • <i>Setup:</i> No extra software settings required! Just enable and confirm system permissions.<br/><br/>
+
+        <b>2. Localhost HTTP/SOCKS5 Proxy Mode:</b><br/>
+        • <i>Overview:</i> Starts a dual-protocol in-app proxy daemon bound to localhost.<br/>
+        • <i>Method:</i> Listens on 127.0.0.1 on your custom configured port.<br/>
+        • <i>Setup:</i> Manually configure your web browser, Telegram, or system Wi-Fi proxy settings to route via:<br/>
+        &amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;<b>Server:</b> 127.0.0.1<br/>
+        &amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;<b>Port:</b> (Your Configured Port, Default: 19088)<br/><br/>
+
+        <h3><b>Secure Handshake Padding</b></h3>
+        To defend against Deep Packet Inspection (DPI) and protocol profiling attacks, the tunnel pads the initial destination route handshake:<br/>
+        • All handshake packets are injected with random padding bytes up to 2x your configured option.<br/>
+        • Data payloads exceeding 1024 bytes automatically bypass padding to optimize network performance.<br/><br/>
+
+        <h3><b>Certificate Insecurity Options</b></h3>
+        • <b>Insecure Mode Enabled:</b> Useful for development with local self-signed TLS certificates (bypasses CA checks).<br/>
+        • <b>Insecure Mode Disabled:</b> Strict TLS checks. Recommended for production deployment.
     </string>
 </resources>

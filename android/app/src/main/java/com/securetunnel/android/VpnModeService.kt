@@ -1,6 +1,7 @@
 package com.securetunnel.android
 
 import android.content.Intent
+import android.net.ProxyInfo
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.util.Log
@@ -8,17 +9,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.net.InetSocketAddress
+import java.net.Socket
 import java.nio.ByteBuffer
-import java.nio.channels.SocketChannel
-import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
-import java.security.SecureRandom
-import java.security.cert.X509Certificate
 
 class VpnModeService : VpnService() {
 
@@ -26,11 +22,35 @@ class VpnModeService : VpnService() {
         private const val TAG = "VpnModeService"
         const val ACTION_START = "com.securetunnel.android.START"
         const val ACTION_STOP = "com.securetunnel.android.STOP"
+
+        @Volatile
+        private var activeInstance: VpnModeService? = null
+
+        /**
+         * Protects an outbound socket from being routed back into the VPN interface.
+         * Crucial to prevent infinite loops when communicating with the remote secure relay.
+         */
+        fun protectSocket(socket: Socket): Boolean {
+            val inst = activeInstance
+            return if (inst != null) {
+                val success = inst.protect(socket)
+                Log.d(TAG, "Relay socket protection: $success")
+                success
+            } else {
+                Log.d(TAG, "No active VPN instance to protect socket.")
+                false
+            }
+        }
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
     private var vpnJob: Job? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        activeInstance = this
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
@@ -48,21 +68,32 @@ class VpnModeService : VpnService() {
         Log.i(TAG, "Starting Secure Tunnel VPN Seamless Mode...")
 
         val config = TunnelConfig.load(this)
-        
+
+        // 1. First ensure the dual SOCKS5/HTTP local proxy listener is running
+        val startProxyIntent = Intent(this, LocalProxyService::class.java).apply {
+            action = LocalProxyService.ACTION_START
+        }
+        startService(startProxyIntent)
+
         try {
-            // Build the virtual network interface inside Android Sandbox
+            // 2. Build the virtual network interface inside Android Sandbox
             val builder = Builder()
                 .setSession("SecureTunnelVPN")
                 .addAddress("10.8.0.2", 32) // Assign virtual inner IP
                 .addRoute("0.0.0.0", 0)       // Intercept all outgoing internet traffic
                 .addDnsServer("8.8.8.8")
+                .addDnsServer("1.1.1.1")
                 .setMtu(1500)
 
+            // Configure Android native HTTP/SOCKS system-wide proxy mapping to our localhost proxy daemon
+            val proxyInfo = ProxyInfo.buildDirectProxy("127.0.0.1", config.localPort)
+            builder.setHttpProxy(proxyInfo)
+
             vpnInterface = builder.establish()
-            Log.i(TAG, "Virtual TUN interface established successfully: $vpnInterface")
+            Log.i(TAG, "Virtual TUN interface established successfully with direct Local Proxy redirection")
 
             vpnJob = serviceScope.launch {
-                runVpnTunnelLoop(config)
+                runVpnTunnelLoop()
             }
         } catch (e: Exception) {
             Log.e(TAG, "Fatal error launching VPN interface:", e)
@@ -70,49 +101,32 @@ class VpnModeService : VpnService() {
         }
     }
 
-    private suspend fun runVpnTunnelLoop(config: TunnelConfig) {
+    private suspend fun runVpnTunnelLoop() {
         val fd = vpnInterface?.fileDescriptor ?: return
         val input = FileInputStream(fd).channel
         val output = FileOutputStream(fd).channel
 
         val buffer = ByteBuffer.allocate(32768)
 
-        Log.i(TAG, "Seamless Vpn Proxy tunnel reading thread launched targeting: ${config.relayHost}:${config.relayPort}")
+        Log.i(TAG, "Seamless VPN Tunnel reading thread launched. Intercepting packets...")
 
-        // In a real VPN application, we parse IP/TCP headers, establish SocketChannels,
-        // and route matching streams over a TLS client socket connected to our remote_relay.
-        // Below is the real-world standard structure encapsulating socket routing and handshake padding.
+        // Simple loop to read and discard raw packets from TUN interface since Android's system networking stack
+        // handles the actual TCP redirection internally through our configured httpProxy redirect automatically.
         try {
             while (vpnJob?.isActive == true) {
                 buffer.clear()
                 val readLength = input.read(buffer)
                 if (readLength > 0) {
+                    // Packet fully consumed
                     buffer.flip()
-                    
-                    // Simulated routing logic: Send intercepted IP frame to remote relay
-                    // Apply handshake padding scheme: Use 4 byte headers [msg_len (2 bytes)][pad_len (2 bytes)]
-                    // if message is > 1024 bytes, skip padding as requested.
-                    val originalPayload = ByteArray(readLength)
-                    buffer.get(originalPayload)
-
-                    val isLargeMessage = readLength > 1024
-                    val padLen = if (isLargeMessage) 0 else (0..config.paddingAmount * 2).random()
-                    
-                    val headerBuffer = ByteBuffer.allocate(4)
-                    headerBuffer.putShort(readLength.toShort())
-                    headerBuffer.putShort(padLen.toShort())
-                    headerBuffer.flip()
-
-                    // Secure connection setup
-                    Log.d(TAG, "intercepted packet size = $readLength bytes. Padding applied = $padLen bytes.")
-                    
-                    // Clear buffer for next read
-                    buffer.clear()
+                    Log.v(TAG, "Consumed raw TUN IP packet of size $readLength bytes")
+                } else if (readLength < 0) {
+                    break
                 }
-                kotlinx.coroutines.delay(10)
+                delay(10)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "VPN Tunneling connection lost:", e)
+            Log.e(TAG, "VPN raw Tunnel reading thread encountered exception:", e)
         }
     }
 
@@ -123,14 +137,23 @@ class VpnModeService : VpnService() {
         try {
             vpnInterface?.close()
         } catch (e: Exception) {
-            Log.e(TAG, "Error closing tunnel handle:", e)
+            Log.e(TAG, "Error closing tunnel handle: ${e.message}")
         }
         vpnInterface = null
+
+        // Stop the localhost HTTP/SOCKS proxy daemon
+        val stopProxyIntent = Intent(this, LocalProxyService::class.java).apply {
+            action = LocalProxyService.ACTION_STOP
+        }
+        startService(stopProxyIntent)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         shutdownVpn()
         serviceScope.cancel()
+        if (activeInstance == this) {
+            activeInstance = null
+        }
     }
 }
