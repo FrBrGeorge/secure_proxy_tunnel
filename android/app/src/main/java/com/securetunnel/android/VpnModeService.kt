@@ -80,10 +80,15 @@ class VpnModeService : VpnService() {
             val builder = Builder()
                 .setSession("SecureTunnelVPN")
                 .addAddress("10.8.0.2", 32) // Assign virtual inner IP
-                .addRoute("0.0.0.0", 0)       // Intercept all outgoing internet traffic
-                .addDnsServer("8.8.8.8")
-                .addDnsServer("1.1.1.1")
+                .addRoute("10.8.0.0", 24)   // Private route to keep TUN active without absorbing all outbound/loopback IP traffic
                 .setMtu(1500)
+
+            // Exclude our own application from the VPN routing to prevent any potential routing loops or conflicts
+            try {
+                builder.addDisallowedApplication(packageName)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to exclude our package from VPN: ${e.message}")
+            }
 
             // Configure Android native HTTP/SOCKS system-wide proxy mapping to our localhost proxy daemon
             val proxyInfo = ProxyInfo.buildDirectProxy("127.0.0.1", config.localPort)
