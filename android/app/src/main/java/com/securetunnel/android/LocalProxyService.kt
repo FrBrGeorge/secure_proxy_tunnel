@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.IBinder
 import android.util.Log
 import kotlinx.coroutines.*
+import kotlin.coroutines.coroutineContext
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetAddress
@@ -163,7 +164,7 @@ class LocalProxyService : Service() {
             Log.i(TAG, "SOCKS5 routing target requested: $targetHost:$targetPort")
 
             // Connect to remote secure TLS/TCP relay
-            relaySocket = try {
+            val rSocket = try {
                 connectToRelay(config)
             } catch (e: Exception) {
                 Log.e(TAG, "SOCKS5 pipeline connection to remote relay failed: ${e.message}")
@@ -171,9 +172,10 @@ class LocalProxyService : Service() {
                 clientOutput.flush()
                 return@withContext
             }
+            relaySocket = rSocket
 
-            val relayInput = relaySocket.getInputStream()
-            val relayOutput = relaySocket.getOutputStream()
+            val relayInput = rSocket.getInputStream()
+            val relayOutput = rSocket.getOutputStream()
 
             // Send target routing payload padded: "target_host:target_port"
             val handshakeBytes = "$targetHost:$targetPort".toByteArray(Charsets.UTF_8)
@@ -292,7 +294,7 @@ class LocalProxyService : Service() {
             Log.i(TAG, "HTTP proxy routing requested: $method $targetHost:$targetPort")
 
             // Connect to remote secure TLS/TCP relay
-            relaySocket = try {
+            val rSocket = try {
                 connectToRelay(config)
             } catch (e: Exception) {
                 Log.e(TAG, "HTTP pipeline connection to remote relay failed: ${e.message}")
@@ -300,9 +302,10 @@ class LocalProxyService : Service() {
                 clientOutput.flush()
                 return@withContext
             }
+            relaySocket = rSocket
 
-            val relayInput = relaySocket.getInputStream()
-            val relayOutput = relaySocket.getOutputStream()
+            val relayInput = rSocket.getInputStream()
+            val relayOutput = rSocket.getOutputStream()
 
             // Send target handshake details padded: "targetHost:targetPort"
             val handshakeBytes = "$targetHost:$targetPort".toByteArray(Charsets.UTF_8)
