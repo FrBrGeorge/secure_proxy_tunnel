@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+
+    <!-- Deep Space Space Blue background representing protection and reliability -->
+    <path
+        android:pathData="M256,0C114.6,0 0,114.6 0,256s114.6,256 256,256 256,-114.6 256,-256S397.4,0 256,0z"
+        android:fillColor="#0B132B" />
+
+    <!-- Isometric/perspective tunnel lines (concentric circles fading to center representing tunnel depth) -->
+    <!-- Outer tunnel ring -->
+    <path
+        android:pathData="M256,80 A176,176 0 1 0 256,432 A176,176 0 1 0 256,80 Z"
+        android:strokeWidth="10"
+        android:strokeColor="#1D3557"
+        android:fillColor="#00000000" />
+        
+    <!-- Middle tunnel ring -->
+    <path
+        android:pathData="M256,130 A126,126 0 1 0 256,382 A126,126 0 1 0 256,130 Z"
+        android:strokeWidth="8"
+        android:strokeColor="#457B9D"
+        android:fillColor="#00000000" />
+        
+    <!-- Inner tunnel ring -->
+    <path
+        android:pathData="M256,180 A76,76 0 1 0 256,332 A76,76 0 1 0 256,180 Z"
+        android:strokeWidth="6"
+        android:strokeColor="#A8DADC"
+        android:fillColor="#00000000" />
+
+    <!-- Center glowing portal -->
+    <path
+        android:pathData="M256,216 A40,40 0 1 0 256,296 A40,40 0 1 0 256,216 Z"
+        android:fillColor="#00F2FE" />
+
+    <!-- Highly polished cyberpunk vector shield layered in the foreground -->
+    <path
+        android:pathData="M256,120 L370,165 C370,265 315,345 256,392 C197,345 142,265 142,165 L256,120 Z"
+        android:strokeWidth="12"
+        android:strokeColor="#00E5FF"
+        android:fillColor="#CD0F172A" />
+
+    <!-- Keyhole motif in center of shield symbolizing security -->
+    <path
+        android:pathData="M256,212 C243.85,212 234,221.85 234,234 C234,242.75 239.12,250.29 246.5,253.79 L241,280 L271,280 L265.5,253.79 C272.88,250.29 278,242.75 278,234 C278,221.85 268.15,212 256,212 Z"
+        android:fillColor="#FFFFFF" />
+
+</vector>
