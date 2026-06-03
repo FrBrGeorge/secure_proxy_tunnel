@@ -38,7 +38,7 @@ jobs:
             chmod +x gradlew
           else
             echo "Init gradlew if not found..."
-            gradle wrapper --gradle-version 8.2
+            gradle wrapper --gradle-version 8.4
             chmod +x gradlew
           fi
 
