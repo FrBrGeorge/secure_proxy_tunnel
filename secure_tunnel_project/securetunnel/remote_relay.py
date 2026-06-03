@@ -6,6 +6,8 @@ import argparse
 import subprocess
 import logging
 
+from securetunnel.common import pad_data, read_padded_data
+
 # Configure logger
 logging.basicConfig(
     level=logging.INFO,
@@ -29,23 +31,24 @@ def generate_self_signed_cert(cert_path="cert.pem", key_path="key.pem"):
         logger.error(f"Error executing openssl to generate certificate: {e}")
         raise e
 
-async def handle_relay_client(reader, writer):
+async def handle_relay_client(reader, writer, padding_amount=0):
     peer = writer.get_extra_info('peername')
     logger.info(f"Incoming secure connection from local proxy client: {peer}")
     target_writer = None
     try:
-        # Step 1: Read the target handshake line: host:port\n
-        line = await reader.readline()
-        if not line:
+        # Step 1: Read the target handshake line with padding
+        target_bytes = await read_padded_data(reader)
+        if not target_bytes:
             logger.warning(f"Connection from {peer} dropped before destination handshake header received")
             return
         
-        target_str = line.decode('utf-8', errors='ignore').strip()
+        target_str = target_bytes.decode('utf-8', errors='ignore').strip()
         logger.info(f"Handshake target routing instruction received from {peer}: '{target_str}'")
         
         if ':' not in target_str:
             logger.error(f"Handshake target format violation from {peer}: '{target_str}'")
-            writer.write(b"ERROR: Invalid handshake target format\n")
+            error_msg = pad_data(b"ERROR: Invalid handshake target format", padding_amount)
+            writer.write(error_msg)
             await writer.drain()
             return
         
@@ -54,7 +57,8 @@ async def handle_relay_client(reader, writer):
             port = int(port_str)
         except ValueError:
             logger.error(f"Handshake port number parse error: '{port_str}'")
-            writer.write(b"ERROR: Invalid port number\n")
+            error_msg = pad_data(b"ERROR: Invalid port number", padding_amount)
+            writer.write(error_msg)
             await writer.drain()
             return
             
@@ -65,12 +69,14 @@ async def handle_relay_client(reader, writer):
             logger.info(f"Egress target connection successfully established to '{host}:{port}'")
         except Exception as e:
             logger.error(f"Egress target connection to '{host}:{port}' failed: {e}")
-            writer.write(f"ERROR: Target Unreachable - {e}\n".encode('utf-8'))
+            error_msg = pad_data(f"ERROR: Target Unreachable - {e}".encode('utf-8'), padding_amount)
+            writer.write(error_msg)
             await writer.drain()
             return
             
-        # Step 3: Send verification OK message back to proxy client
-        writer.write(b"OK\n")
+        # Step 3: Send verification OK message back to proxy client with padding
+        ok_msg = pad_data(b"OK", padding_amount)
+        writer.write(ok_msg)
         await writer.drain()
         logger.info(f"Routing handshake successfully completed. Coupling pipe conduits for {peer} <-> {host}:{port}")
         
@@ -119,7 +125,16 @@ async def main_async():
     parser.add_argument("--port", type=int, default=9999, help="Relay server listen port (default: 9999)")
     parser.add_argument("--cert", default="cert.pem", help="TLS certificate path (default: cert.pem)")
     parser.add_argument("--key", default="key.pem", help="TLS private key path (default: key.pem)")
+    parser.add_argument("--padding", type=int, default=0, help="Approximate handshake padding amount (default: 0)")
+    parser.add_argument("--loglevel", default="INFO", help="Visible log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
     args = parser.parse_args()
+    
+    # Configure logger level dynamically
+    numeric_level = getattr(logging, args.loglevel.upper(), None)
+    if not isinstance(numeric_level, int):
+        numeric_level = logging.INFO
+    logging.getLogger().setLevel(numeric_level)
+    logger.setLevel(numeric_level)
     
     # Check or auto-generate certificate paths
     if not os.path.exists(args.cert) or not os.path.exists(args.key):
@@ -138,7 +153,7 @@ async def main_async():
         sys.exit(1)
     
     server = await asyncio.start_server(
-        handle_relay_client, args.host, args.port, ssl=ssl_context
+        lambda r, w: handle_relay_client(r, w, args.padding), args.host, args.port, ssl=ssl_context
     )
     
     addr = server.sockets[0].getsockname()

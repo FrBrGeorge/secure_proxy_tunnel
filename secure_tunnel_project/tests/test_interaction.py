@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from securetunnel.local_proxy import handle_proxy_client
 from securetunnel.remote_relay import handle_relay_client, generate_self_signed_cert
+from securetunnel.common import pad_data, read_padded_data
 
 class TestTunnelInteraction(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -182,6 +183,121 @@ class TestTunnelInteraction(unittest.IsolatedAsyncioTestCase):
         # Search for domain inside target received data records
         received_data_str = b"".join(self.target_received_data)
         self.assertIn(b"socks-host", received_data_str)
+
+
+class TestPaddingUtility(unittest.TestCase):
+    def test_padding_and_unpadding_behavior(self):
+        """
+        Verify that pad_data produces output that read_padded_data can reconstruct perfectly,
+        testing with various padding amounts including 0.
+        """
+        async def verify_roundtrip(data: bytes, padding_amount: int):
+            padded = pad_data(data, padding_amount)
+            # Use an asyncio StreamReader mock to read it back
+            reader = asyncio.StreamReader()
+            reader.feed_data(padded)
+            reader.feed_eof()
+            unpadded = await read_padded_data(reader)
+            self.assertEqual(data, unpadded)
+
+        loop = asyncio.new_event_loop()
+        try:
+            for pad_amount in [0, 5, 20, 100]:
+                loop.run_until_complete(verify_roundtrip(b"Hello world!", pad_amount))
+                loop.run_until_complete(verify_roundtrip(b"", pad_amount))
+                loop.run_until_complete(verify_roundtrip(os.urandom(1000), pad_amount))
+        finally:
+            loop.close()
+
+
+class TestTunnelInteractionWithPadding(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.cert_path = "test_cert_padded.pem"
+        self.key_path = "test_key_padded.pem"
+        self.padding_amount = 32
+        
+        # Ensure we have test TLS certificates
+        if not os.path.exists(self.cert_path) or not os.path.exists(self.key_path):
+            generate_self_signed_cert(self.cert_path, self.key_path)
+
+        # Set up SSL Server Context for the Relay
+        self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        self.ssl_context.load_cert_chain(certfile=self.cert_path, keyfile=self.key_path)
+
+        # 1. Start a simple HTTP/TCP Mock Echo Target Destination Server
+        self.target_received_data = []
+        async def handle_target_client(reader, writer):
+            data = await reader.read(1024)
+            self.target_received_data.append(data)
+            # Mock simple HTTP response
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\nHello Target")
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+
+        self.target_server = await asyncio.start_server(handle_target_client, "127.0.0.1", 0)
+        self.target_port = self.target_server.sockets[0].getsockname()[1]
+
+        # 2. Start Secure TCP Remote Relay Server with padding
+        async def run_relay(reader, writer):
+            await handle_relay_client(reader, writer, self.padding_amount)
+
+        self.relay_server = await asyncio.start_server(
+            run_relay, "127.0.0.1", 0, ssl=self.ssl_context
+        )
+        self.relay_port = self.relay_server.sockets[0].getsockname()[1]
+
+        # 3. Start Local HTTP Proxy Server with padding
+        async def run_local_proxy(reader, writer):
+            await handle_proxy_client(
+                reader, writer, "127.0.0.1", self.relay_port, insecure=True, padding_amount=self.padding_amount
+            )
+
+        self.proxy_server = await asyncio.start_server(run_local_proxy, "127.0.0.1", 0)
+        self.proxy_port = self.proxy_server.sockets[0].getsockname()[1]
+
+    async def asyncTearDown(self):
+        self.proxy_server.close()
+        self.relay_server.close()
+        self.target_server.close()
+        await asyncio.gather(
+            self.proxy_server.wait_closed(),
+            self.relay_server.wait_closed(),
+            self.target_server.wait_closed(),
+            return_exceptions=True
+        )
+        
+        # Cleanup temporary certificates
+        for f in (self.cert_path, self.key_path):
+            if os.path.exists(f):
+                try:
+                    os.unlink(f)
+                except Exception:
+                    pass
+
+    async def test_padded_http_proxy_get_transmission(self):
+        """
+        Verify that transmission works flawlessly with high-level randomized handshake padding.
+        """
+        reader, writer = await asyncio.open_connection("127.0.0.1", self.proxy_port)
+
+        request = (
+            f"GET http://127.0.0.1:{self.target_port}/test HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{self.target_port}\r\n"
+            f"User-Agent: SecureTunnelTest\r\n"
+            f"\r\n"
+        )
+        writer.write(request.encode('utf-8'))
+        await writer.drain()
+
+        response = await reader.read(4096)
+        writer.close()
+        await writer.wait_closed()
+
+        self.assertIn(b"HTTP/1.1 200 OK", response)
+        self.assertIn(b"Hello Target", response)
+        self.assertTrue(len(self.target_received_data) > 0)
+
 
 if __name__ == "__main__":
     unittest.main()

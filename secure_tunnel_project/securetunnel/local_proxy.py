@@ -4,6 +4,8 @@ import sys
 import argparse
 import logging
 
+from securetunnel.common import pad_data, read_padded_data
+
 # Configure logger
 logging.basicConfig(
     level=logging.INFO,
@@ -29,7 +31,7 @@ async def forward_stream(src_reader, dest_writer, direction_tag):
         except Exception:
             pass
 
-async def handle_socks5(reader, writer, relay_host, relay_port, insecure):
+async def handle_socks5(reader, writer, relay_host, relay_port, insecure, padding_amount=0):
     peer = writer.get_extra_info('peername')
     try:
         # Read the remaining auth methods count
@@ -94,21 +96,22 @@ async def handle_socks5(reader, writer, relay_host, relay_port, insecure):
             await writer.drain()
             return
             
-        # Forward destination handshake header to remote relay: host:port\n
+        # Forward destination handshake header to remote relay with padding
         logger.info(f"Relaying target routing instruction: '{host}:{port}' to TLS relay server")
-        handshake_payload = f"{host}:{port}\n".encode('utf-8')
-        relay_writer.write(handshake_payload)
+        handshake_payload = f"{host}:{port}".encode('utf-8')
+        padded_payload = pad_data(handshake_payload, padding_amount)
+        relay_writer.write(padded_payload)
         await relay_writer.drain()
         
-        # Await relay acknowledgment
-        relay_reply = await relay_reader.readline()
+        # Await relay acknowledgment with padding
+        relay_reply = await read_padded_data(relay_reader)
         if not relay_reply:
             logger.error("Relay closed socket execution during SOCKS5 target negotiation")
             writer.write(b"\x05\x03\x00\x01\x00\x00\x00\x00\x00\x00")  # Network unreachable
             await writer.drain()
             return
             
-        relay_reply_msg = relay_reply.decode('utf-8').strip()
+        relay_reply_msg = relay_reply.decode('utf-8', errors='ignore').strip()
         if relay_reply_msg != "OK":
             logger.error(f"Relay rejected target instruction: '{relay_reply_msg}'")
             writer.write(b"\x05\x05\x00\x01\x00\x00\x00\x00\x00\x00")  # Connection refused
@@ -128,7 +131,7 @@ async def handle_socks5(reader, writer, relay_host, relay_port, insecure):
     except Exception as e:
         logger.error(f"Exception encountered in handling SOCKS5 flow from {peer}: {e}")
 
-async def handle_http(first_byte, reader, writer, relay_host, relay_port, insecure):
+async def handle_http(first_byte, reader, writer, relay_host, relay_port, insecure, padding_amount=0):
     peer = writer.get_extra_info('peername')
     relay_writer = None
     try:
@@ -218,21 +221,22 @@ async def handle_http(first_byte, reader, writer, relay_host, relay_port, insecu
             await writer.drain()
             return
             
-        # Send target destination handshake to remote relay: host:port\n
+        # Send target destination handshake to remote relay with padding
         logger.info(f"Relaying target routing instruction: '{host}:{port}' to TLS relay server")
-        handshake_payload = f"{host}:{port}\n".encode('utf-8')
-        relay_writer.write(handshake_payload)
+        handshake_payload = f"{host}:{port}".encode('utf-8')
+        padded_payload = pad_data(handshake_payload, padding_amount)
+        relay_writer.write(padded_payload)
         await relay_writer.drain()
         
-        # Expect response from remote relay (OK\n or ERROR)
-        relay_reply = await relay_reader.readline()
+        # Expect response from remote relay with padding
+        relay_reply = await read_padded_data(relay_reader)
         if not relay_reply:
             logger.error("Relay aborted connection abruptly during HTTP routing handshake")
             writer.write(b"HTTP/1.1 502 Bad Gateway (Relay closed socket)\r\n\r\n")
             await writer.drain()
             return
             
-        relay_reply_msg = relay_reply.decode('utf-8').strip()
+        relay_reply_msg = relay_reply.decode('utf-8', errors='ignore').strip()
         if relay_reply_msg != "OK":
             logger.error(f"Relay rejected target instruction: '{relay_reply_msg}'")
             writer.write(f"HTTP/1.1 502 Bad Gateway ({relay_reply_msg})\r\n\r\n".encode('utf-8'))
@@ -264,7 +268,7 @@ async def handle_http(first_byte, reader, writer, relay_host, relay_port, insecu
             except Exception:
                 pass
 
-async def handle_proxy_client(reader, writer, relay_host, relay_port, insecure):
+async def handle_proxy_client(reader, writer, relay_host, relay_port, insecure, padding_amount=0):
     peer = writer.get_extra_info('peername')
     logger.info(f"Local connection from client {peer}")
     
@@ -278,10 +282,10 @@ async def handle_proxy_client(reader, writer, relay_host, relay_port, insecure):
 
         if first_byte == b'\x05':
             # This is standard SOCKS5
-            await handle_socks5(reader, writer, relay_host, relay_port, insecure)
+            await handle_socks5(reader, writer, relay_host, relay_port, insecure, padding_amount)
         else:
             # Fall back to standard HTTP Proxy CONNECT/GET behavior
-            await handle_http(first_byte, reader, writer, relay_host, relay_port, insecure)
+            await handle_http(first_byte, reader, writer, relay_host, relay_port, insecure, padding_amount)
             
     except Exception as e:
         logger.error(f"Error occurred routing tunnel conduit for client {peer}: {e}")
@@ -300,10 +304,19 @@ async def main_async():
     parser.add_argument("--relay-host", default="127.0.0.1", help="Remote secure TCP relay host (default: 127.0.0.1)")
     parser.add_argument("--relay-port", type=int, default=9999, help="Remote secure TCP relay port (default: 9999)")
     parser.add_argument("--insecure", action="store_true", default=False, help="Relax TLS chain and hostname verification (useful for self-signed development relays)")
+    parser.add_argument("--padding", type=int, default=0, help="Approximate handshake padding amount (default: 0)")
+    parser.add_argument("--loglevel", default="INFO", help="Visible log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
     args = parser.parse_args()
     
+    # Configure logger level dynamically
+    numeric_level = getattr(logging, args.loglevel.upper(), None)
+    if not isinstance(numeric_level, int):
+        numeric_level = logging.INFO
+    logging.getLogger().setLevel(numeric_level)
+    logger.setLevel(numeric_level)
+    
     server = await asyncio.start_server(
-        lambda r, w: handle_proxy_client(r, w, args.relay_host, args.relay_port, args.insecure),
+        lambda r, w: handle_proxy_client(r, w, args.relay_host, args.relay_port, args.insecure, args.padding),
         args.host,
         args.port
     )
