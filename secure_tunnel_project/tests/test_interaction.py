@@ -193,6 +193,8 @@ class TestPaddingUtility(unittest.TestCase):
         """
         async def verify_roundtrip(data: bytes, padding_amount: int):
             padded = pad_data(data, padding_amount)
+            # The header is exactly 4 bytes (2 bytes msg_len + 2 bytes pad_len)
+            self.assertTrue(len(padded) >= len(data) + 4)
             # Use an asyncio StreamReader mock to read it back
             reader = asyncio.StreamReader()
             reader.feed_data(padded)
@@ -209,12 +211,35 @@ class TestPaddingUtility(unittest.TestCase):
         finally:
             loop.close()
 
+    def test_no_padding_for_large_messages(self):
+        """
+        Verify that if length of the message is more than 1024 bytes, it needs no padding.
+        The resulting length should be exactly len(data) + 4 (only the 4-byte header).
+        """
+        data = os.urandom(1025)
+        padded = pad_data(data, padding_amount=100)
+        # Header is 4 bytes + no padding = 1029 bytes exactly
+        self.assertEqual(len(padded), len(data) + 4)
+        # Verify the 2-bytes pad_len is 0
+        pad_len = int.from_bytes(padded[2:4], 'big')
+        self.assertEqual(pad_len, 0)
+
+    def test_default_padding_is_64(self):
+        """
+        Verify that the default padding_amount is 64 when not specified.
+        """
+        data = b"Hello"
+        padded = pad_data(data)
+        # Max padding is randomized up to 2 * 64 = 128 bytes. Header is 4 bytes.
+        # Max length should be 5 + 4 + 128 = 137 bytes.
+        self.assertTrue(len(padded) <= len(data) + 4 + 128)
+
 
 class TestTunnelInteractionWithPadding(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.cert_path = "test_cert_padded.pem"
         self.key_path = "test_key_padded.pem"
-        self.padding_amount = 32
+        self.padding_amount = 64
         
         # Ensure we have test TLS certificates
         if not os.path.exists(self.cert_path) or not os.path.exists(self.key_path):

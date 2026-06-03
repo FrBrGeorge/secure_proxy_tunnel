@@ -304,7 +304,7 @@ async def main_async():
     parser.add_argument("--relay-host", default="127.0.0.1", help="Remote secure TCP relay host (default: 127.0.0.1)")
     parser.add_argument("--relay-port", type=int, default=9999, help="Remote secure TCP relay port (default: 9999)")
     parser.add_argument("--insecure", action="store_true", default=False, help="Relax TLS chain and hostname verification (useful for self-signed development relays)")
-    parser.add_argument("--padding", type=int, default=0, help="Approximate handshake padding amount (default: 0)")
+    parser.add_argument("--padding", type=int, default=64, help="Approximate handshake padding amount in bytes (default: 64)")
     parser.add_argument("--loglevel", default="INFO", help="Visible log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
     args = parser.parse_args()
     

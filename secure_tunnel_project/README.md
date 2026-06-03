@@ -59,6 +59,7 @@ securetunnel-relay --host 0.0.0.0 --port 9999
 * `--port`: Port to listen on (default: `9999`).
 * `--cert`: Custom path to a PEM-formatted certificate file (default: `cert.pem`).
 * `--key`: Custom path to a PEM-formatted private key file (default: `key.pem`).
+* `--padding`: Approximate handshake randomized padding amount in bytes (default: `64`).
 
 ---
 
@@ -77,6 +78,7 @@ securetunnel-local --host 127.0.0.1 --port 8888 --relay-host 127.0.0.1 --relay-p
 * `--relay-host`: Destination host of the secure remote relay (default: `127.0.0.1`).
 * `--relay-port`: Destination port of the secure remote relay (default: `9999`).
 * `--insecure`: Disable verification of TLS certificate chain (required for auto-generated self-signed certificates).
+* `--padding`: Approximate handshake randomized padding amount in bytes (default: `64`).
 
 ---
 
@@ -96,3 +98,23 @@ You can configure any modern web browser to utilize the tunnel:
 2. Select **HTTP Proxy** / **Secure Proxy**.
 3. Point host to `127.0.0.1` and port to `8888`.
 4. Apply configurations. All web requests will proceed securely via the TLS relay.
+
+---
+
+## 🔒 Handshake Padding Protocol (v0.0.3)
+
+To defeat traffic analysis attacks, the initial handshake messages are encapsulated inside a custom padded stream:
+
+### Header Structure
+All handshakes use a compact **4-byte header**:
+| Offset | Width (Bytes) | Field Name | Description |
+|---|---|---|---|
+| `0` | `2` | `msg_len` | 16-bit Big-Endian integer determining the actual payload size. |
+| `2` | `2` | `pad_len` | 16-bit Big-Endian integer determining the randomized padding size. |
+
+Followed directly by `msg_len` bytes of data and `pad_len` bytes of random noise padding.
+
+### Optimized Rules
+- **Automatic High-Overhead Skip**: If the handshake payload is larger than `1024` bytes, no padding is added (`pad_len = 0`) to avoid unnecessary CPU/bandwidth overhead.
+- **Default Padding**: The default padding budget is `64` bytes (with real padding randomized between `0` and `2 * budget`).
+

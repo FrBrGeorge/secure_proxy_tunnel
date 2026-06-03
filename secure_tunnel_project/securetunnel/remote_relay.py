@@ -125,7 +125,7 @@ async def main_async():
     parser.add_argument("--port", type=int, default=9999, help="Relay server listen port (default: 9999)")
     parser.add_argument("--cert", default="cert.pem", help="TLS certificate path (default: cert.pem)")
     parser.add_argument("--key", default="key.pem", help="TLS private key path (default: key.pem)")
-    parser.add_argument("--padding", type=int, default=0, help="Approximate handshake padding amount (default: 0)")
+    parser.add_argument("--padding", type=int, default=64, help="Approximate handshake padding amount in bytes (default: 64)")
     parser.add_argument("--loglevel", default="INFO", help="Visible log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
     args = parser.parse_args()
     
