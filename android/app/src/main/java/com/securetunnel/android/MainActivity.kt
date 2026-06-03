@@ -37,11 +37,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var activeConfig: TunnelConfig
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState: Bundle?)
+        super.onCreate(savedInstanceState)
         
         // Assemble clean layout programmatically to eliminate XML view binding overhead
         val rootLayout = ScrollView(this).apply {
-            fillViewport = true
+            isFillViewport = true
             setBackgroundColor(android.graphics.Color.parseColor("#F8FAFC")) // slate-50
         }
 
@@ -145,11 +145,11 @@ class MainActivity : AppCompatActivity() {
         
         rbVpnMode = RadioButton(this).apply {
             text = "VPN API (Seamless)"
-            id = generateViewId()
+            id = android.view.View.generateViewId()
         }
         rbLocalProxyMode = RadioButton(this).apply {
             text = "Localhost HTTP Proxy"
-            id = generateViewId()
+            id = android.view.View.generateViewId()
             isChecked = true // Starting with localhost proxy
         }
         rgModeSelection.addView(rbLocalProxyMode)

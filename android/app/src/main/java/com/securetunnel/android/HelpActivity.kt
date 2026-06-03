@@ -8,7 +8,7 @@ import androidx.appcompat.app.AppCompatActivity
 
 class HelpActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState: Bundle?)
+        super.onCreate(savedInstanceState)
         
         // Simple elegant dialog layout created programmatically
         val layout = android.widget.LinearLayout(this).apply {

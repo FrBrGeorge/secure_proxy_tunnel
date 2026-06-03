@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.IBinder
 import android.util.Log
 import kotlinx.coroutines.*
+import kotlin.coroutines.coroutineContext
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetAddress
@@ -95,7 +96,8 @@ class LocalProxyService : Service() {
                     // Strict verification
                     val rawSocket = Socket()
                     rawSocket.connect(java.net.InetSocketAddress(config.relayHost, config.relayPort), 5000)
-                    relaySocket = javax.net.ssl.SSLSocketFactory.getDefault().createSocket(rawSocket, config.relayHost, config.relayPort, true) as SSLSocket
+                    val sslSocketFactory = javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory
+                    relaySocket = sslSocketFactory.createSocket(rawSocket, config.relayHost, config.relayPort, true) as SSLSocket
                     (relaySocket as SSLSocket).startHandshake()
                     Log.d(TAG, "Strict TLS secure connection succeeded.")
                 }
