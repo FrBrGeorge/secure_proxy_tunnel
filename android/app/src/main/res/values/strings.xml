@@ -1,0 +1,32 @@
+<resources>
+    <string name="app_name">Secure Tunnel Client</string>
+    <string name="title_vpn_settings">Seamless VPN Tunnel API</string>
+    <string name="title_local_proxy_settings">Localhost HTTP Proxy API</string>
+    
+    <string name="label_relay_host">Remote Relay Host</string>
+    <string name="label_relay_port">Remote Relay Port</string>
+    <string name="label_local_port">Local Proxy Port</string>
+    <string name="label_padding_amount">Handshake Padding (bytes)</string>
+    <string name="label_insecure_mode">Insecure Mode (Allow Self-Signed TLS)</string>
+    <string name="label_save_settings">Save Config</string>
+    
+    <string name="status_stopped">Disconnected</string>
+    <string name="status_running">Running / Engaged</string>
+    <string name="button_start">Connect Tunnel</string>
+    <string name="button_stop">Disconnect</string>
+    
+    <string name="app_help_title">Secure Tunnel - Android App Help</string>
+    <string name="app_help_body">
+        Welcome to Secure Tunnel Android Client (v0.0.3).\n\n
+        This app connects your Android device securely through an encrypted SSL/TLS tunnel to a remote Secure Relay.\n\n
+        <b>Modes of Operation:</b>\n\n
+        <b>1. Seamless VPN Mode (Android VPN API):</b>\n
+        Redirects all device-wide TCP/UDP traffic through a virtual network interface (TUN). No application-level setup required. Traffic is securely packed, optionally randomized with padding, and relayed directly.\n\n
+        <b>2. Localhost HTTP Proxy Mode:</b>\n
+        Starts an in-app HTTP/HTTPS proxy listener bound to Android's localhost (127.0.0.1) on your configured port (default: 19088). You configure your Wi-Fi settings or individual apps (like browsers) to route via 127.0.0.1:19088.\n\n
+        <b>Secure Handsake Padding:</b>\n
+        To prevent profiling attacks, handshakes are padded with up to 2x your configured amount. Packets over 1024 bytes skip padding to optimize bandwidth.\n\n
+        <b>Insecure Mode (Default: Engaged):</b>\n
+        Allows connecting through self-signed certificates or test deployment Relays easily without strict hostname/chain checks. Disable for production nodes.
+    </string>
+</resources>

@@ -5,7 +5,7 @@
 
 import { useState, useEffect } from "react";
 import { motion } from "motion/react";
-import { Copy, Terminal as TermIcon, FileText, Check, Pocket, Network, AlertTriangle } from "lucide-react";
+import { Copy, Terminal as TermIcon, FileText, Check, Pocket, Network, AlertTriangle, Smartphone, Laptop } from "lucide-react";
 import { ProxySystemStatus, PackageFiles, TunnelTestResult } from "./types";
 
 import Header from "./components/Header";
@@ -14,6 +14,7 @@ import TestConsole from "./components/TestConsole";
 import CodeViewer from "./components/CodeViewer";
 import Terminal from "./components/Terminal";
 import PythonTestRunner from "./components/PythonTestRunner";
+import AndroidWorkspace from "./components/AndroidWorkspace";
 
 export default function App() {
   const [status, setStatus] = useState<ProxySystemStatus | null>(null);
@@ -21,6 +22,7 @@ export default function App() {
   const [loadingFiles, setLoadingFiles] = useState(true);
   const [isDownloading, setIsDownloading] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<"desktop" | "android">("android");
 
   // 1. Poll Status Diagnostics
   const fetchStatus = async () => {
@@ -122,94 +124,144 @@ export default function App() {
 
       {/* Main Core Container */}
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-          
-          {/* LEFT PANELS: Setup controls & dynamic requests tester */}
-          <section className="space-y-6 lg:col-span-4" id="section_configuration">
-            <motion.div
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4 }}
+        
+        {/* Workspace Switcher Tabs */}
+        <div className="flex bg-slate-900/60 rounded-xl p-1 border border-slate-800/80 max-w-md mb-8">
+          <button
+            onClick={() => setActiveWorkspaceTab("desktop")}
+            id="tab_desktop_workspace"
+            className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+              activeWorkspaceTab === "desktop" 
+                ? "bg-teal-500 text-slate-950 shadow-lg shadow-teal-500/10" 
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <Laptop className="h-4 w-4" /> Python Daemon Suite
+          </button>
+          <button
+            onClick={() => setActiveWorkspaceTab("android")}
+            id="tab_android_workspace"
+            className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+              activeWorkspaceTab === "android" 
+                ? "bg-teal-500 text-slate-950 shadow-lg shadow-teal-500/10" 
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <Smartphone className="h-4 w-4" /> Android Client Studio
+          </button>
+        </div>
+
+        {activeWorkspaceTab === "desktop" ? (
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+            
+            {/* LEFT PANELS: Setup controls & dynamic requests tester */}
+            <section className="space-y-6 lg:col-span-4" id="section_configuration">
+              <motion.div
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4 }}
+              >
+                <ControlPanel
+                  status={status}
+                  onControlAction={handleControlAction}
+                  isProcessing={isProcessing}
+                />
+              </motion.div>
+
+              <motion.div
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4, delay: 0.05 }}
+              >
+                <PythonTestRunner
+                  onRunPythonTests={handleRunPythonTests}
+                />
+              </motion.div>
+
+              <motion.div
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4, delay: 0.1 }}
+              >
+                <TestConsole
+                  onRunTest={handleRunTest}
+                  isProxyOffline={status?.proxy.status !== "running"}
+                />
+              </motion.div>
+
+              {/* Micro sandbox architecture description card */}
+              <motion.div
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4, delay: 0.15 }}
+                className="rounded-xl border border-slate-800/60 bg-slate-900/20 p-5 text-xs text-slate-400"
+              >
+                <div className="flex items-center gap-2 mb-3 text-slate-300 font-semibold tracking-wider uppercase text-[10px]">
+                  <Network className="h-4 w-4 text-teal-400" /> Connecting Architecture
+                </div>
+                <p className="leading-relaxed mb-3">
+                  This app runs a simulated secure loop-back in your active Cloud Run workspace. When you click 
+                  <strong className="text-slate-300"> "Route Request"</strong>, it executes a command line curl process targeting our sandboxed HTTP proxy.
+                </p>
+                <div className="rounded bg-slate-950/60 px-3 py-2 font-mono text-[10px] text-teal-400 border border-slate-900 leading-snug">
+                  Client (curl) <br />
+                  ➔ Local Proxy:19088 <br />
+                  ➔ Secure TLS Tunnel <br />
+                  ➔ Remote Relay:19099 <br />
+                  ➔ Target Destination
+                </div>
+              </motion.div>
+            </section>
+
+            {/* RIGHT PANELS: Real-time terminals and filesystem explorers */}
+            <section className="space-y-6 lg:col-span-8" id="section_terminal_and_explorer">
+              <motion.div
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4, delay: 0.1 }}
+              >
+                <Terminal
+                  proxyState={status?.proxy || null}
+                  relayState={status?.relay || null}
+                  onClearLogs={(serv) => handleControlAction("clear-logs", serv)}
+                />
+              </motion.div>
+
+              <motion.div
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4, delay: 0.2 }}
+              >
+                <CodeViewer
+                  files={files}
+                  isLoading={loadingFiles}
+                />
+              </motion.div>
+            </section>
+
+          </div>
+        ) : (
+          <div className="space-y-8">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.98 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.35 }}
             >
-              <ControlPanel
-                status={status}
-                onControlAction={handleControlAction}
-                isProcessing={isProcessing}
-              />
+              <AndroidWorkspace />
             </motion.div>
 
-            <motion.div
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, delay: 0.05 }}
-            >
-              <PythonTestRunner
-                onRunPythonTests={handleRunPythonTests}
-              />
-            </motion.div>
-
-            <motion.div
-              initial={{ opacity: 0, y: 15 }}
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.4, delay: 0.1 }}
-            >
-              <TestConsole
-                onRunTest={handleRunTest}
-                isProxyOffline={status?.proxy.status !== "running"}
-              />
-            </motion.div>
-
-            {/* Micro sandbox architecture description card */}
-            <motion.div
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, delay: 0.15 }}
-              className="rounded-xl border border-slate-800/60 bg-slate-900/20 p-5 text-xs text-slate-400"
-            >
-              <div className="flex items-center gap-2 mb-3 text-slate-300 font-semibold tracking-wider uppercase text-[10px]">
-                <Network className="h-4 w-4 text-teal-400" /> Connecting Architecture
-              </div>
-              <p className="leading-relaxed mb-3">
-                This app runs a simulated secure loop-back in your active Cloud Run workspace. When you click 
-                <strong className="text-slate-300"> "Route Request"</strong>, it executes a command line curl process targeting our sandboxed HTTP proxy.
-              </p>
-              <div className="rounded bg-slate-950/60 px-3 py-2 font-mono text-[10px] text-teal-400 border border-slate-900 leading-snug">
-                Client (curl) <br />
-                ➔ Local Proxy:19088 <br />
-                ➔ Secure TLS Tunnel <br />
-                ➔ Remote Relay:19099 <br />
-                ➔ Target Destination
-              </div>
-            </motion.div>
-          </section>
-
-          {/* RIGHT PANELS: Real-time terminals and filesystem explorers */}
-          <section className="space-y-6 lg:col-span-8" id="section_terminal_and_explorer">
-            <motion.div
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, delay: 0.1 }}
-            >
-              <Terminal
-                proxyState={status?.proxy || null}
-                relayState={status?.relay || null}
-                onClearLogs={(serv) => handleControlAction("clear-logs", serv)}
-              />
-            </motion.div>
-
-            <motion.div
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, delay: 0.2 }}
             >
               <CodeViewer
                 files={files}
                 isLoading={loadingFiles}
               />
             </motion.div>
-          </section>
-
-        </div>
+          </div>
+        )}
       </main>
 
       {/* Footer credits bar */}

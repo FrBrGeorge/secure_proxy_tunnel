@@ -28,4 +28,11 @@ export interface PackageFiles {
   "tests/test_interaction.py": string;
   ".github/workflows/ci.yml"?: string;
   ".github/workflows/release.yml"?: string;
+  "android/MainActivity.kt"?: string;
+  "android/VpnModeService.kt"?: string;
+  "android/LocalProxyService.kt"?: string;
+  "android/TunnelConfig.kt"?: string;
+  "android/HelpActivity.kt"?: string;
+  "android/AndroidManifest.xml"?: string;
+  ".github/workflows/android.yml"?: string;
 }

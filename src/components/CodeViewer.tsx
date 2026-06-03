@@ -33,10 +33,17 @@ export default function CodeViewer({ files, isLoading }: CodeViewerProps) {
     "securetunnel/local_proxy.py",
     "securetunnel/remote_relay.py",
     "tests/test_interaction.py",
+    "README.md",
+    "LICENSE",
     ".github/workflows/ci.yml",
     ".github/workflows/release.yml",
-    "README.md",
-    "LICENSE"
+    ".github/workflows/android.yml",
+    "android/AndroidManifest.xml",
+    "android/TunnelConfig.kt",
+    "android/VpnModeService.kt",
+    "android/LocalProxyService.kt",
+    "android/HelpActivity.kt",
+    "android/MainActivity.kt"
   ];
 
   const handleCopy = () => {
@@ -50,6 +57,8 @@ export default function CodeViewer({ files, isLoading }: CodeViewerProps) {
 
   const getLanguageTag = (filepath: string) => {
     if (filepath.endsWith(".py")) return "Python";
+    if (filepath.endsWith(".kt")) return "Kotlin";
+    if (filepath.endsWith(".xml")) return "XML";
     if (filepath.endsWith(".toml")) return "TOML";
     if (filepath.endsWith(".md")) return "Markdown";
     if (filepath.endsWith(".yml") || filepath.endsWith(".yaml")) return "YAML";
@@ -77,27 +86,55 @@ export default function CodeViewer({ files, isLoading }: CodeViewerProps) {
             <span>securetunnel-project</span>
           </div>
 
-          <nav className="flex flex-col gap-1">
+          <nav className="flex flex-col gap-1 overflow-y-auto max-h-[500px]">
             {fileKeys.map((file) => {
               const isSelected = selectedFile === file;
               const isNested = file.includes("/");
+              
+              // Conditional Category Headers
+              let headerElement = null;
+              if (file === "pyproject.toml") {
+                headerElement = (
+                  <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider pt-2 pb-1 px-1 border-t border-slate-900 mt-2">
+                    Package Settings
+                  </div>
+                );
+              } else if (file === ".github/workflows/ci.yml") {
+                headerElement = (
+                  <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider pt-4 pb-1 px-1 border-t border-slate-900 mt-2">
+                    GitHub Actions
+                  </div>
+                );
+              } else if (file === "android/AndroidManifest.xml") {
+                headerElement = (
+                  <div className="text-[10px] uppercase font-bold text-teal-500/80 tracking-wider pt-4 pb-1 px-1 border-t border-slate-900 mt-2">
+                    Android Client
+                  </div>
+                );
+              }
+
               return (
-                <button
-                  key={file}
-                  onClick={() => {
-                    setSelectedFile(file);
-                    setCopied(false);
-                  }}
-                  id={`btn_select_file_${file.replace(/[\/\.]/g, "_")}`}
-                  className={`flex items-center gap-2 rounded-md px-3 py-2 text-left text-xs font-medium tracking-wide transition-all ${
-                    isSelected
-                      ? "bg-teal-500/10 text-teal-400 border border-teal-500/20 shadow-[0_0_10px_rgba(45,212,191,0.05)]"
-                      : "text-slate-400 hover:bg-slate-900/60 hover:text-slate-200 border border-transparent"
-                  } ${isNested ? "ml-4" : ""}`}
-                >
-                  <FileText className={`h-3.5 w-3.5 flex-shrink-0 ${isSelected ? 'text-teal-400' : 'text-slate-500'}`} />
-                  <span className="truncate font-mono text-[11px]">{isNested ? file.split("/")[1] : file}</span>
-                </button>
+                <div key={file}>
+                  {headerElement}
+                  <button
+                    onClick={() => {
+                      setSelectedFile(file);
+                      setCopied(false);
+                    }}
+                    id={`btn_select_file_${file.replace(/[\/\.]/g, "_")}`}
+                    className={`flex items-center gap-2 rounded-md px-3 py-2 text-left text-xs font-medium tracking-wide transition-all ${
+                      isSelected
+                        ? "bg-teal-500/10 text-teal-400 border border-teal-500/20 shadow-[0_0_10px_rgba(45,212,191,0.05)]"
+                        : "text-slate-400 hover:bg-slate-900/60 hover:text-slate-200 border border-transparent"
+                    } ${isNested && !file.startsWith("android/") ? "ml-4" : ""} ${file.startsWith("android/") ? "ml-2" : ""}`}
+                    style={{ width: '100%' }}
+                  >
+                    <FileText className={`h-3.5 w-3.5 flex-shrink-0 ${isSelected ? 'text-teal-400' : 'text-slate-500'}`} />
+                    <span className="truncate font-mono text-[11px]">
+                      {isNested ? (file.startsWith("android/") ? file.substring(8) : file.split("/")[1]) : file}
+                    </span>
+                  </button>
+                </div>
               );
             })}
           </nav>

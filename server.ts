@@ -402,11 +402,40 @@ app.get("/api/proxy/files", (req, res) => {
 
     let ciWf = "";
     let releaseWf = "";
+    let androidWf = "";
+    let mainActivity = "";
+    let vpnService = "";
+    let localProxyService = "";
+    var tunnelConfig = "";
+    var helpActivity = "";
+    var manifest = "";
+
     try {
       ciWf = fs.readFileSync(path.join(process.cwd(), ".github", "workflows", "ci.yml"), "utf-8");
     } catch {}
     try {
       releaseWf = fs.readFileSync(path.join(process.cwd(), ".github", "workflows", "release.yml"), "utf-8");
+    } catch {}
+    try {
+      androidWf = fs.readFileSync(path.join(process.cwd(), ".github", "workflows", "android.yml"), "utf-8");
+    } catch {}
+    try {
+      mainActivity = fs.readFileSync(path.join(process.cwd(), "android", "app", "src", "main", "java", "com", "securetunnel", "android", "MainActivity.kt"), "utf-8");
+    } catch {}
+    try {
+      vpnService = fs.readFileSync(path.join(process.cwd(), "android", "app", "src", "main", "java", "com", "securetunnel", "android", "VpnModeService.kt"), "utf-8");
+    } catch {}
+    try {
+      localProxyService = fs.readFileSync(path.join(process.cwd(), "android", "app", "src", "main", "java", "com", "securetunnel", "android", "LocalProxyService.kt"), "utf-8");
+    } catch {}
+    try {
+      tunnelConfig = fs.readFileSync(path.join(process.cwd(), "android", "app", "src", "main", "java", "com", "securetunnel", "android", "TunnelConfig.kt"), "utf-8");
+    } catch {}
+    try {
+      helpActivity = fs.readFileSync(path.join(process.cwd(), "android", "app", "src", "main", "java", "com", "securetunnel", "android", "HelpActivity.kt"), "utf-8");
+    } catch {}
+    try {
+      manifest = fs.readFileSync(path.join(process.cwd(), "android", "app", "src", "main", "AndroidManifest.xml"), "utf-8");
     } catch {}
 
     res.json({
@@ -417,7 +446,14 @@ app.get("/api/proxy/files", (req, res) => {
       "LICENSE": license,
       "tests/test_interaction.py": interactionTest,
       ".github/workflows/ci.yml": ciWf,
-      ".github/workflows/release.yml": releaseWf
+      ".github/workflows/release.yml": releaseWf,
+      "android/MainActivity.kt": mainActivity,
+      "android/VpnModeService.kt": vpnService,
+      "android/LocalProxyService.kt": localProxyService,
+      "android/TunnelConfig.kt": tunnelConfig,
+      "android/HelpActivity.kt": helpActivity,
+      "android/AndroidManifest.xml": manifest,
+      ".github/workflows/android.yml": androidWf
     });
   } catch (err: any) {
     res.status(500).json({ error: "Failed to read files of proxy: " + err.message });
