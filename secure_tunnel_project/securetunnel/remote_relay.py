@@ -6,7 +6,11 @@ import argparse
 import subprocess
 import logging
 
-from securetunnel.common import pad_data, read_padded_data
+from securetunnel.common import (
+    pad_data, read_padded_data,
+    CMD_CONNECT, CMD_CONNECT_OK, CMD_CONNECT_FAIL, CMD_DATA, CMD_CLOSE, CMD_KEEPALIVE,
+    STMPConnection, read_stmp_frame
+)
 
 # Configure logger
 logging.basicConfig(
@@ -33,91 +37,126 @@ def generate_self_signed_cert(cert_path="cert.pem", key_path="key.pem"):
 
 async def handle_relay_client(reader, writer, padding_amount=0):
     peer = writer.get_extra_info('peername')
-    logger.info(f"Incoming secure connection from local proxy client: {peer}")
-    target_writer = None
+    logger.info(f"Incoming multiplexed secure session connection from local proxy client: {peer}")
+    
+    active_targets = {}  # stream_id -> target_writer
     try:
-        # Step 1: Read the target handshake line with padding
-        target_bytes = await read_padded_data(reader)
-        if not target_bytes:
-            logger.warning(f"Connection from {peer} dropped before destination handshake header received")
+        # Step 1: Read the session handshake with padding
+        handshake_bytes = await read_padded_data(reader)
+        if not handshake_bytes or handshake_bytes != b"SESSION_INIT":
+            logger.warning(f"Connection from {peer} dropped: session handshake was invalid or missing")
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
             return
         
-        target_str = target_bytes.decode('utf-8', errors='ignore').strip()
-        logger.info(f"Handshake target routing instruction received from {peer}: '{target_str}'")
+        logger.info(f"Session handshake successfully verified for {peer}. Generating SESSION_OK...")
         
-        if ':' not in target_str:
-            logger.error(f"Handshake target format violation from {peer}: '{target_str}'")
-            error_msg = pad_data(b"ERROR: Invalid handshake target format", padding_amount)
-            writer.write(error_msg)
-            await writer.drain()
-            return
-        
-        host, port_str = target_str.rsplit(':', 1)
-        try:
-            port = int(port_str)
-        except ValueError:
-            logger.error(f"Handshake port number parse error: '{port_str}'")
-            error_msg = pad_data(b"ERROR: Invalid port number", padding_amount)
-            writer.write(error_msg)
-            await writer.drain()
-            return
-            
-        # Step 2: Establish connection to requested destination
-        logger.info(f"Attempting egress connection to raw destination '{host}:{port}'...")
-        try:
-            target_reader, target_writer = await asyncio.open_connection(host, port)
-            logger.info(f"Egress target connection successfully established to '{host}:{port}'")
-        except Exception as e:
-            logger.error(f"Egress target connection to '{host}:{port}' failed: {e}")
-            error_msg = pad_data(f"ERROR: Target Unreachable - {e}".encode('utf-8'), padding_amount)
-            writer.write(error_msg)
-            await writer.drain()
-            return
-            
-        # Step 3: Send verification OK message back to proxy client with padding
-        ok_msg = pad_data(b"OK", padding_amount)
+        # Step 2: Send verification OK message back to proxy client with padding
+        ok_msg = pad_data(b"SESSION_OK", padding_amount)
         writer.write(ok_msg)
         await writer.drain()
-        logger.info(f"Routing handshake successfully completed. Coupling pipe conduits for {peer} <-> {host}:{port}")
+        logger.info(f"Session established. Switching to STMP multiplexing loop for {peer}")
         
-        # Step 4: Bidirectional data proxy piping
-        async def forward_stream(src_reader, dest_writer, direction_tag):
-            try:
-                while True:
-                    data = await src_reader.read(16384)
-                    if not data:
-                        break
-                    dest_writer.write(data)
-                    await dest_writer.drain()
-            except Exception as ex:
-                logger.debug(f"Piping conduit error on {direction_tag}: {ex}")
-            finally:
-                try:
-                    dest_writer.close()
-                    await dest_writer.wait_closed()
-                except Exception:
-                    pass
+        conn = STMPConnection(writer)
 
-        await asyncio.gather(
-            forward_stream(reader, target_writer, "relay client -> destination"),
-            forward_stream(target_reader, writer, "destination -> relay client")
-        )
-        
+        async def target_handler(stream_id, host, port):
+            try:
+                logger.info(f"Session [{peer}]: stream {stream_id} connecting egress to {host}:{port}")
+                t_reader, t_writer = await asyncio.open_connection(host, port)
+                active_targets[stream_id] = t_writer
+                await conn.write_frame(stream_id, CMD_CONNECT_OK)
+                logger.info(f"Session [{peer}]: stream {stream_id} egress established to {host}:{port}")
+                
+                async def pipe_target_to_proxy():
+                    try:
+                        while True:
+                            data = await t_reader.read(16384)
+                            if not data:
+                                break
+                            await conn.write_frame(stream_id, CMD_DATA, data)
+                    except Exception:
+                        pass
+                    finally:
+                        await conn.write_frame(stream_id, CMD_CLOSE)
+                        active_targets.pop(stream_id, None)
+                        try:
+                            t_writer.close()
+                            await t_writer.wait_closed()
+                        except Exception:
+                            pass
+                        logger.info(f"Session [{peer}]: stream {stream_id} closed target forwarding")
+
+                asyncio.create_task(pipe_target_to_proxy())
+            except Exception as ex:
+                logger.error(f"Session [{peer}]: stream {stream_id} egress connection to {host}:{port} failed: {ex}")
+                await conn.write_frame(stream_id, CMD_CONNECT_FAIL, str(ex).encode('utf-8'))
+
+        # Step 3: Read loop
+        while True:
+            frame = await read_stmp_frame(reader)
+            if frame is None:
+                logger.info(f"Multiplexed session closed or EOF from local proxy {peer}")
+                break
+            
+            stream_id, cmd, payload = frame
+            
+            if cmd == CMD_CONNECT:
+                try:
+                    destination = payload.decode('utf-8', errors='ignore').strip()
+                    if ':' in destination:
+                        host, port_str = destination.rsplit(':', 1)
+                        port = int(port_str)
+                        asyncio.create_task(target_handler(stream_id, host, port))
+                    else:
+                        await conn.write_frame(stream_id, CMD_CONNECT_FAIL, b"Invalid host:port format")
+                except Exception as e:
+                    await conn.write_frame(stream_id, CMD_CONNECT_FAIL, str(e).encode('utf-8'))
+                    
+            elif cmd == CMD_DATA:
+                t_writer = active_targets.get(stream_id)
+                if t_writer:
+                    try:
+                        t_writer.write(payload)
+                        await t_writer.drain()
+                    except Exception:
+                        active_targets.pop(stream_id, None)
+                        try:
+                            t_writer.close()
+                        except Exception:
+                            pass
+                        await conn.write_frame(stream_id, CMD_CLOSE)
+                        
+            elif cmd == CMD_CLOSE:
+                t_writer = active_targets.pop(stream_id, None)
+                if t_writer:
+                    logger.info(f"Session [{peer}]: closing stream {stream_id} as requested by client")
+                    try:
+                        t_writer.close()
+                    except Exception:
+                        pass
+                        
+            elif cmd == CMD_KEEPALIVE:
+                # Ping back keepalive
+                await conn.write_frame(stream_id, CMD_KEEPALIVE)
+                
     except Exception as e:
         logger.error(f"Errors occurred in relay conduit for client {peer}: {e}")
     finally:
-        logger.info(f"Terminating relay conduits and connections for client {peer}")
+        logger.info(f"Terminating multiplexed relay sessions and connections for client {peer}")
+        # Clean up all targets for this session
+        for stream_id, t_writer in list(active_targets.items()):
+            try:
+                t_writer.close()
+            except Exception:
+                pass
         try:
             writer.close()
             await writer.wait_closed()
         except Exception:
             pass
-        if target_writer:
-            try:
-                target_writer.close()
-                await target_writer.wait_closed()
-            except Exception:
-                pass
 
 async def main_async():
     parser = argparse.ArgumentParser(description="Secure TCP Relay Server")

@@ -5,7 +5,11 @@ import argparse
 import logging
 import socket
 
-from securetunnel.common import pad_data, read_padded_data
+from securetunnel.common import (
+    pad_data, read_padded_data,
+    CMD_CONNECT, CMD_CONNECT_OK, CMD_CONNECT_FAIL, CMD_DATA, CMD_CLOSE, CMD_KEEPALIVE,
+    STMPConnection, read_stmp_frame
+)
 
 # Configure logger
 logging.basicConfig(
@@ -27,48 +31,162 @@ def setup_socket_options(writer):
     except Exception:
         pass
 
-async def forward_stream(src_reader, dest_writer, direction_tag):
-    try:
-        while True:
-            data = await src_reader.read(16384)
-            if not data:
-                break
-            dest_writer.write(data)
-            await dest_writer.drain()
-    except Exception as ex:
-        logger.debug(f"Piping conduit exception ({direction_tag}): {ex}")
-    finally:
-        try:
-            dest_writer.close()
-            await dest_writer.wait_closed()
-        except Exception:
-            pass
+class RelaySessionManager:
+    def __init__(self, relay_host, relay_port, insecure, padding_amount):
+        self.relay_host = relay_host
+        self.relay_port = relay_port
+        self.insecure = insecure
+        self.padding_amount = padding_amount
+        self.conn = None
+        self.lock = asyncio.Lock()
+        self.active_streams = {}  # stream_id -> {'queue': asyncio.Queue, 'connect_fut': asyncio.Future}
+        self.next_stream_id = 1
+        self.reader_task = None
 
-async def handle_socks5(reader, writer, relay_host, relay_port, insecure, padding_amount=0):
+    async def get_connection(self):
+        async with self.lock:
+            if self.conn is not None:
+                return self.conn
+            
+            ssl_context = ssl.create_default_context()
+            if self.insecure:
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+                
+            try:
+                logger.info(f"Establishing new multiplexed session to secure remote relay at {self.relay_host}:{self.relay_port}...")
+                reader, writer = await asyncio.open_connection(
+                    self.relay_host, self.relay_port, ssl=ssl_context
+                )
+                setup_socket_options(writer)
+                
+                # Perform session handshake with padding
+                handshake_payload = b"SESSION_INIT"
+                padded_payload = pad_data(handshake_payload, self.padding_amount)
+                writer.write(padded_payload)
+                await writer.drain()
+                
+                # Await relay acknowledgment with padding
+                relay_reply = await read_padded_data(reader)
+                if not relay_reply or relay_reply != b"SESSION_OK":
+                    raise Exception("Handshake validation failed or session rejected by remote TLS relay")
+                
+                logger.info("Session with secure remote relay established successfully!")
+                self.conn = STMPConnection(writer)
+                
+                # Spawn background reader loop
+                self.reader_task = asyncio.create_task(self._reader_loop(reader))
+                return self.conn
+            except Exception as e:
+                logger.error(f"Failed to connect to secure remote relay: {e}")
+                self.conn = None
+                raise e
+
+    async def _reader_loop(self, reader):
+        try:
+            while True:
+                frame = await read_stmp_frame(reader)
+                if frame is None:
+                    break
+                
+                stream_id, cmd, payload = frame
+                stream = self.active_streams.get(stream_id)
+                if not stream:
+                    continue
+                
+                if cmd == CMD_CONNECT_OK:
+                    fut = stream['connect_fut']
+                    if not fut.done():
+                        fut.set_result(True)
+                elif cmd == CMD_CONNECT_FAIL:
+                    fut = stream['connect_fut']
+                    if not fut.done():
+                        fut.set_result(False)
+                elif cmd == CMD_DATA:
+                    await stream['queue'].put((CMD_DATA, payload))
+                elif cmd == CMD_CLOSE:
+                    await stream['queue'].put((CMD_CLOSE, b""))
+                    fut = stream['connect_fut']
+                    if not fut.done():
+                        fut.set_result(False)
+        except Exception as e:
+            logger.debug(f"Error in relay session reader loop: {e}")
+        finally:
+            logger.warning("Relay connection session died.")
+            await self.reset_connection()
+
+    async def reset_connection(self):
+        async with self.lock:
+            if self.conn:
+                await self.conn.close()
+                self.conn = None
+            if self.reader_task:
+                self.reader_task.cancel()
+                self.reader_task = None
+            
+            # Fail all waiting streams and write close to queue
+            for stream in list(self.active_streams.values()):
+                fut = stream['connect_fut']
+                if not fut.done():
+                    fut.set_result(False)
+                await stream['queue'].put((CMD_CLOSE, b""))
+            self.active_streams.clear()
+
+    async def create_stream(self, host, port):
+        conn = await self.get_connection()
+        
+        async with self.lock:
+            stream_id = self.next_stream_id
+            self.next_stream_id += 1
+            stream = {
+                'queue': asyncio.Queue(),
+                'connect_fut': asyncio.get_running_loop().create_future()
+            }
+            self.active_streams[stream_id] = stream
+            
+        logger.info(f"Requesting remote relay egress for streamID {stream_id} -> '{host}:{port}'")
+        dest_payload = f"{host}:{port}".encode('utf-8')
+        await conn.write_frame(stream_id, CMD_CONNECT, dest_payload)
+        
+        success = await stream['connect_fut']
+        if success:
+            return stream_id, stream['queue']
+        else:
+            async with self.lock:
+                self.active_streams.pop(stream_id, None)
+            raise Exception("Remote egress target connection failed")
+
+    async def send_data(self, stream_id, data):
+        if self.conn:
+            await self.conn.write_frame(stream_id, CMD_DATA, data)
+
+    async def close_stream(self, stream_id):
+        async with self.lock:
+            self.active_streams.pop(stream_id, None)
+        if self.conn:
+            await self.conn.write_frame(stream_id, CMD_CLOSE)
+
+session_manager = None
+
+async def handle_socks5(reader, writer, insecure, padding_amount=0):
     peer = writer.get_extra_info('peername')
-    relay_writer = None
     try:
-        # Read the remaining auth methods count
         nmethods_bytes = await reader.readexactly(1)
         nmethods = nmethods_bytes[0]
-        # Read the methods themselves
         _ = await reader.readexactly(nmethods)
         
-        # Respond with selected auth method: No Authentication (0x00)
         writer.write(b"\x05\x00")
         await writer.drain()
         
-        # Read request header: version (1B), command (1B), reserved (1B), address type (1B)
         req_header = await reader.readexactly(4)
         ver, cmd, rsv, atyp = req_header
         
         if ver != 5 or cmd != 1:
             logger.error(f"SOCKS5 command ({cmd}) or version ({ver}) unsupported from {peer}")
-            writer.write(b"\x05\x07\x00\x01\x00\x00\x00\x00\x00\x00")  # Command not supported
+            writer.write(b"\x05\x07\x00\x01\x00\x00\x00\x00\x00\x00")
             await writer.drain()
             return
             
-        # Extract host address depending on address type (atyp)
         if atyp == 0x01:  # IPv4
             ip_bytes = await reader.readexactly(4)
             host = ".".join(str(b) for b in ip_bytes)
@@ -82,83 +200,70 @@ async def handle_socks5(reader, writer, relay_host, relay_port, insecure, paddin
             host = ":".join(f"{ipv6_bytes[i]:02x}{ipv6_bytes[i+1]:02x}" for i in range(0, 16, 2))
         else:
             logger.error(f"SOCKS5 address type (ATYP {atyp}) unsupported from {peer}")
-            writer.write(b"\x05\x08\x00\x01\x00\x00\x00\x00\x00\x00")  # Address type not supported
+            writer.write(b"\x05\x08\x00\x01\x00\x00\x00\x00\x00\x00")
             await writer.drain()
             return
             
-        # Read port numbers (2 bytes, big-endian)
         port_bytes = await reader.readexactly(2)
         port = int.from_bytes(port_bytes, 'big')
         
         logger.info(f"SOCKS5 Routing requested to target '{host}:{port}' for client {peer}")
         
-        # Connect to secure remote relay
-        ssl_context = ssl.create_default_context()
-        if insecure:
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-            
+        # Open multiplexed stream
         try:
-            logger.info(f"Connecting SOCKS5 pipeline to remote relay at {relay_host}:{relay_port}...")
-            relay_reader, relay_writer = await asyncio.open_connection(
-                relay_host, relay_port, ssl=ssl_context
-            )
-            setup_socket_options(relay_writer)
-            logger.info(f"SOCKS5 conduit connected to secure remote relay {relay_host}:{relay_port}")
+            stream_id, queue = await session_manager.create_stream(host, port)
         except Exception as e:
-            logger.error(f"SOCKS5 egress connection to relay failed: {e}")
-            writer.write(b"\x05\x05\x00\x01\x00\x00\x00\x00\x00\x00")  # Connection refused / host unreachable
+            logger.error(f"SOCKS5 multiplexed stream registration failed: {e}")
+            writer.write(b"\x05\x05\x00\x01\x00\x00\x00\x00\x00\x00")
             await writer.drain()
             return
             
-        # Forward destination handshake header to remote relay with padding
-        logger.info(f"Relaying target routing instruction: '{host}:{port}' to TLS relay server")
-        handshake_payload = f"{host}:{port}".encode('utf-8')
-        padded_payload = pad_data(handshake_payload, padding_amount)
-        relay_writer.write(padded_payload)
-        await relay_writer.drain()
-        
-        # Await relay acknowledgment with padding
-        relay_reply = await read_padded_data(relay_reader)
-        if not relay_reply:
-            logger.error("Relay closed socket execution during SOCKS5 target negotiation")
-            writer.write(b"\x05\x03\x00\x01\x00\x00\x00\x00\x00\x00")  # Network unreachable
-            await writer.drain()
-            return
-            
-        relay_reply_msg = relay_reply.decode('utf-8', errors='ignore').strip()
-        if relay_reply_msg != "OK":
-            logger.error(f"Relay rejected target instruction: '{relay_reply_msg}'")
-            writer.write(b"\x05\x05\x00\x01\x00\x00\x00\x00\x00\x00")  # Connection refused
-            await writer.drain()
-            return
-            
-        # Inform client of connection success: SOCKS5 reply code 0x00 (succeeded), atyp=0x01, ip=0.0.0.0, port=03
+        # SOCKS5 reply success
         writer.write(b"\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00")
         await writer.drain()
         logger.info(f"SOCKS5 proxy tunnel fully interconnected to '{host}:{port}'")
         
+        async def client_to_relay():
+            try:
+                while True:
+                    data = await reader.read(16384)
+                    if not data:
+                        break
+                    await session_manager.send_data(stream_id, data)
+            except Exception:
+                pass
+            finally:
+                await session_manager.close_stream(stream_id)
+
+        async def relay_to_client():
+            try:
+                while True:
+                    cmd, data = await queue.get()
+                    if cmd == CMD_CLOSE:
+                        break
+                    writer.write(data)
+                    await writer.drain()
+            except Exception:
+                pass
+            finally:
+                try:
+                    writer.close()
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+
         # Coupled forwarding
-        t1 = asyncio.create_task(forward_stream(reader, relay_writer, "socks5 client -> relay"))
-        t2 = asyncio.create_task(forward_stream(relay_reader, writer, "relay -> socks5 client"))
+        t1 = asyncio.create_task(client_to_relay())
+        t2 = asyncio.create_task(relay_to_client())
         await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
         t1.cancel()
         t2.cancel()
     except Exception as e:
         logger.error(f"Exception encountered in handling SOCKS5 flow from {peer}: {e}")
-    finally:
-        if relay_writer:
-            try:
-                relay_writer.close()
-                await relay_writer.wait_closed()
-            except Exception:
-                pass
 
-async def handle_http(first_byte, reader, writer, relay_host, relay_port, insecure, padding_amount=0):
+async def handle_http(first_byte, reader, writer, insecure, padding_amount=0):
     peer = writer.get_extra_info('peername')
-    relay_writer = None
     try:
-        # Read the rest of browser/http request headers
         header_data = first_byte
         while True:
             line = await reader.readline()
@@ -188,7 +293,6 @@ async def handle_http(first_byte, reader, writer, relay_host, relay_port, insecu
 
         method, target = parts[0], parts[1]
         
-        # Determine host and port
         if method == "CONNECT":
             if ":" in target:
                 host, port_str = target.rsplit(':', 1)
@@ -226,80 +330,67 @@ async def handle_http(first_byte, reader, writer, relay_host, relay_port, insecu
 
         logger.info(f"Target connection requested via HTTP Proxy flow: {method} {host}:{port}")
 
-        # Connect to secure remote relay
-        ssl_context = ssl.create_default_context()
-        if insecure:
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-
+        # Open multiplexed stream
         try:
-            logger.info(f"Connecting HTTP proxy pipeline to remote relay at {relay_host}:{relay_port}...")
-            relay_reader, relay_writer = await asyncio.open_connection(
-                relay_host, relay_port, ssl=ssl_context
-            )
-            setup_socket_options(relay_writer)
-            logger.info(f"HTTP proxy pipeline connected to secure remote relay {relay_host}:{relay_port}")
+            stream_id, queue = await session_manager.create_stream(host, port)
         except Exception as e:
-            logger.error(f"HTTP proxy egress connection to secure remote relay failed: {e}")
+            logger.error(f"HTTP stream establishment failed: {e}")
             writer.write(b"HTTP/1.1 502 Bad Gateway (Failed to connect to relay)\r\n\r\n")
             await writer.drain()
             return
             
-        # Send target destination handshake to remote relay with padding
-        logger.info(f"Relaying target routing instruction: '{host}:{port}' to TLS relay server")
-        handshake_payload = f"{host}:{port}".encode('utf-8')
-        padded_payload = pad_data(handshake_payload, padding_amount)
-        relay_writer.write(padded_payload)
-        await relay_writer.drain()
-        
-        # Expect response from remote relay with padding
-        relay_reply = await read_padded_data(relay_reader)
-        if not relay_reply:
-            logger.error("Relay aborted connection abruptly during HTTP routing handshake")
-            writer.write(b"HTTP/1.1 502 Bad Gateway (Relay closed socket)\r\n\r\n")
-            await writer.drain()
-            return
-            
-        relay_reply_msg = relay_reply.decode('utf-8', errors='ignore').strip()
-        if relay_reply_msg != "OK":
-            logger.error(f"Relay rejected target instruction: '{relay_reply_msg}'")
-            writer.write(f"HTTP/1.1 502 Bad Gateway ({relay_reply_msg})\r\n\r\n".encode('utf-8'))
-            await writer.drain()
-            return
-            
-        # Complete handshake back to client for CONNECT requests, or forward full payload
         if method == "CONNECT":
             writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
             await writer.drain()
             logger.info(f"HTTP CONNECT proxy tunnel fully established to '{host}:{port}'")
         else:
-            relay_writer.write(header_data)
-            await relay_writer.drain()
+            await session_manager.send_data(stream_id, header_data)
             logger.info(f"HTTP GET/POST header payload forwarded directly to secure relay to '{host}:{port}'")
 
+        async def client_to_relay():
+            try:
+                while True:
+                    data = await reader.read(16384)
+                    if not data:
+                        break
+                    await session_manager.send_data(stream_id, data)
+            except Exception:
+                pass
+            finally:
+                await session_manager.close_stream(stream_id)
+
+        async def relay_to_client():
+            try:
+                while True:
+                    cmd, data = await queue.get()
+                    if cmd == CMD_CLOSE:
+                        break
+                    writer.write(data)
+                    await writer.drain()
+            except Exception:
+                pass
+            finally:
+                try:
+                    writer.close()
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+
         # Coupled forwarding
-        t1 = asyncio.create_task(forward_stream(reader, relay_writer, "http client -> relay"))
-        t2 = asyncio.create_task(forward_stream(relay_reader, writer, "relay -> http client"))
+        t1 = asyncio.create_task(client_to_relay())
+        t2 = asyncio.create_task(relay_to_client())
         await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
         t1.cancel()
         t2.cancel()
     except Exception as e:
          logger.error(f"General exception encountered in handling HTTP proxy client: {e}")
-    finally:
-        if relay_writer:
-            try:
-                relay_writer.close()
-                await relay_writer.wait_closed()
-            except Exception:
-                pass
 
-async def handle_proxy_client(reader, writer, relay_host, relay_port, insecure, padding_amount=0):
+async def handle_proxy_client(reader, writer, insecure, padding_amount=0):
     peer = writer.get_extra_info('peername')
     logger.info(f"Local connection from client {peer}")
     setup_socket_options(writer)
     
     try:
-        # Pre-read the first byte of incoming traffic to inspect request type/protocol
         try:
             first_byte = await reader.readexactly(1)
         except asyncio.IncompleteReadError:
@@ -307,11 +398,9 @@ async def handle_proxy_client(reader, writer, relay_host, relay_port, insecure, 
             return
 
         if first_byte == b'\x05':
-            # This is standard SOCKS5
-            await handle_socks5(reader, writer, relay_host, relay_port, insecure, padding_amount)
+            await handle_socks5(reader, writer, insecure, padding_amount)
         else:
-            # Fall back to standard HTTP Proxy CONNECT/GET behavior
-            await handle_http(first_byte, reader, writer, relay_host, relay_port, insecure, padding_amount)
+            await handle_http(first_byte, reader, writer, insecure, padding_amount)
             
     except Exception as e:
         logger.error(f"Error occurred routing tunnel conduit for client {peer}: {e}")
@@ -341,8 +430,18 @@ async def main_async():
     logging.getLogger().setLevel(numeric_level)
     logger.setLevel(numeric_level)
     
+    global session_manager
+    session_manager = RelaySessionManager(
+        args.relay_host, args.relay_port, args.insecure, args.padding
+    )
+    
+    try:
+        await session_manager.get_connection()
+    except Exception as e:
+        logger.warning(f"Could not establish initial session with relay (will retry on demand): {e}")
+        
     server = await asyncio.start_server(
-        lambda r, w: handle_proxy_client(r, w, args.relay_host, args.relay_port, args.insecure, args.padding),
+        lambda r, w: handle_proxy_client(r, w, args.insecure, args.padding),
         args.host,
         args.port
     )

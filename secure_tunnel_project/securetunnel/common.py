@@ -2,6 +2,61 @@ import os
 import random
 import asyncio
 
+# STMP Multiplexed Protocol Command Constants
+CMD_CONNECT = 1
+CMD_CONNECT_OK = 2
+CMD_CONNECT_FAIL = 3
+CMD_DATA = 4
+CMD_CLOSE = 5
+CMD_KEEPALIVE = 6
+
+class STMPConnection:
+    def __init__(self, writer: asyncio.StreamWriter):
+        self.writer = writer
+        self.lock = asyncio.Lock()
+
+    async def write_frame(self, stream_id: int, cmd: int, payload: bytes = b""):
+        async with self.lock:
+            try:
+                payload_len = len(payload)
+                header = stream_id.to_bytes(4, 'big') + bytes([cmd]) + payload_len.to_bytes(4, 'big')
+                self.writer.write(header + payload)
+                await self.writer.drain()
+            except Exception:
+                pass
+
+    async def close(self):
+        async with self.lock:
+            try:
+                self.writer.close()
+                await self.writer.wait_closed()
+            except Exception:
+                pass
+
+async def read_stmp_frame(reader: asyncio.StreamReader):
+    """
+    Reads a single STMP frame: header (9 bytes) + payload.
+    Returns (stream_id, cmd, payload) or None if EOF or error.
+    """
+    try:
+        header = await reader.readexactly(9)
+    except Exception:
+        return None
+    
+    stream_id = int.from_bytes(header[0:4], 'big')
+    cmd = header[4]
+    payload_len = int.from_bytes(header[5:9], 'big')
+    
+    try:
+        if payload_len > 0:
+            payload = await reader.readexactly(payload_len)
+        else:
+            payload = b""
+    except Exception:
+        return None
+        
+    return stream_id, cmd, payload
+
 def pad_data(data: bytes, padding_amount: int = 64) -> bytes:
     """
     Pads bytes with an approximate amount of random data.

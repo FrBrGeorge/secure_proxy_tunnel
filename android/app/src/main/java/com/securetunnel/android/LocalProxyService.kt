@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.IBinder
 import android.util.Log
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlin.coroutines.coroutineContext
 import java.io.InputStream
 import java.io.OutputStream
@@ -17,7 +18,17 @@ import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.random.Random
+
+// STMP Multiplexed Protocol Command Constants
+const val CMD_CONNECT: Byte = 1
+const val CMD_CONNECT_OK: Byte = 2
+const val CMD_CONNECT_FAIL: Byte = 3
+const val CMD_DATA: Byte = 4
+const val CMD_CLOSE: Byte = 5
+const val CMD_KEEPALIVE: Byte = 6
 
 class LocalProxyService : Service() {
 
@@ -30,6 +41,7 @@ class LocalProxyService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
     private var serverSocket: ServerSocket? = null
     private var proxyJob: Job? = null
+    private val relaySession = RelaySessionManager(this)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -52,6 +64,15 @@ class LocalProxyService : Service() {
         
         proxyJob = serviceScope.launch {
             try {
+                // Initialize the single persistent relay session to handshake ahead of first request
+                launch {
+                    try {
+                        relaySession.ensureSession(config)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Relay session setup delayed or failed (will retry on demand): ${e.message}")
+                    }
+                }
+
                 // Listen on all interfaces so it receives connections from VPN interface (e.g. 10.8.0.2) as well as loopback (127.0.0.1)
                 serverSocket = ServerSocket(config.localPort, 50, InetAddress.getByName("0.0.0.0"))
                 Log.i(TAG, "Proxy server listening on all interfaces at port ${config.localPort}")
@@ -76,7 +97,6 @@ class LocalProxyService : Service() {
 
     private suspend fun handleClientConnection(clientSocket: Socket, config: TunnelConfig) {
         withContext(Dispatchers.IO) {
-            var relaySocket: Socket? = null
             try {
                 val clientInput = clientSocket.getInputStream()
                 val clientOutput = clientSocket.getOutputStream()
@@ -90,10 +110,8 @@ class LocalProxyService : Service() {
                 val firstByte = firstByteInt.toByte()
 
                 if (firstByte == 0x05.toByte()) {
-                    // Standard SOCKS5 protocol flow
                     handleSocks5Client(firstByte, clientSocket, clientInput, clientOutput, config)
                 } else {
-                    // Fall back to standard HTTP / HTTP CONNECT Proxy flow
                     handleHttpClient(firstByte, clientSocket, clientInput, clientOutput, config)
                 }
 
@@ -112,7 +130,9 @@ class LocalProxyService : Service() {
         clientOutput: OutputStream,
         config: TunnelConfig
     ) = withContext(Dispatchers.IO) {
-        var relaySocket: Socket? = null
+        val streamId = relaySession.registerStream()
+        val streamContext = relaySession.getStream(streamId) ?: return@withContext
+
         try {
             // SOCKS5 Greeting: [nmethods (1B)][methods (nmethods bytes)]
             val nmethods = clientInput.read()
@@ -131,7 +151,6 @@ class LocalProxyService : Service() {
 
             if (ver != 5 || cmd != 1) {
                 Log.e(TAG, "Unsupported SOCKS5 option (ver: $ver, cmd: $cmd)")
-                // Command not supported: [0x05][0x07][0x00][0x01][0x00..]
                 clientOutput.write(byteArrayOf(0x05, 0x07, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
                 clientOutput.flush()
                 return@withContext
@@ -157,7 +176,6 @@ class LocalProxyService : Service() {
                 targetHost = hexParts.joinToString(":")
             } else {
                 Log.e(TAG, "Unsupported atyp type: $atyp")
-                // Address type not supported
                 clientOutput.write(byteArrayOf(0x05, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
                 clientOutput.flush()
                 return@withContext
@@ -167,33 +185,23 @@ class LocalProxyService : Service() {
             val portBytes = readExactly(clientInput, 2)
             val targetPort = ((portBytes[0].toInt() and 0xFF) shl 8) or (portBytes[1].toInt() and 0xFF)
 
-            Log.i(TAG, "SOCKS5 routing target requested: $targetHost:$targetPort")
+            Log.i(TAG, "SOCKS5 routing target requested: $targetHost:$targetPort in multiplexed session")
 
-            // Connect to remote secure TLS/TCP relay
-            val rSocket = try {
-                connectToRelay(config)
-            } catch (e: Exception) {
-                Log.e(TAG, "SOCKS5 pipeline connection to remote relay failed: ${e.message}")
-                clientOutput.write(byteArrayOf(0x05, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)) // Connection refused
-                clientOutput.flush()
-                return@withContext
-            }
-            relaySocket = rSocket
+            // Ensure we have an active relay session (this will connect or reuse)
+            relaySession.ensureSession(config)
 
-            val relayInput = rSocket.getInputStream()
-            val relayOutput = rSocket.getOutputStream()
+            // Request egress connection
+            val requestPayload = "$targetHost:$targetPort".toByteArray(Charsets.UTF_8)
+            relaySession.writeFrame(streamId, CMD_CONNECT, requestPayload)
 
-            // Send target routing payload padded: "target_host:target_port"
-            val handshakeBytes = "$targetHost:$targetPort".toByteArray(Charsets.UTF_8)
-            TunnelProtocol.writePaddedData(relayOutput, handshakeBytes, config.paddingAmount)
+            // Await connection success response
+            val isConnected = withTimeoutOrNull(15000) {
+                streamContext.connectResult.receive()
+            } ?: false
 
-            // Await verification OK message from relay
-            val relayReplyBytes = TunnelProtocol.readPaddedData(relayInput)
-            val relayReply = String(relayReplyBytes, Charsets.UTF_8).trim()
-
-            if (relayReply != "OK") {
-                Log.e(TAG, "Relay rejected handshake target instruction: '$relayReply'")
-                clientOutput.write(byteArrayOf(0x05, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)) // Connection refused
+            if (!isConnected) {
+                Log.e(TAG, "Relay rejected handshake or failed to establish egress connection.")
+                clientOutput.write(byteArrayOf(0x05, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
                 clientOutput.flush()
                 return@withContext
             }
@@ -201,18 +209,51 @@ class LocalProxyService : Service() {
             // SOCKS5 reply success: SOCKS5 reply code 0x00, atyp=0x01, ip=0.0.0.0, port=0
             clientOutput.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
             clientOutput.flush()
-            Log.i(TAG, "SOCKS5 proxy tunnel fully interconnected to '$targetHost:$targetPort'")
+            Log.i(TAG, "SOCKS5 proxy tunnel fully established to '$targetHost:$targetPort'")
 
             // Coupled raw direct bidirectional forwarding
-            // If either connection side closes, we close the peer socket to immediately unblock the other read stream
-            val clientToRelayJob = launch { pipeRawStream(clientInput, relayOutput, rSocket) }
-            val relayToClientJob = launch { pipeRawStream(relayInput, clientOutput, clientSocket) }
+            val clientToRelayJob = launch {
+                val buffer = ByteArray(16384)
+                try {
+                    while (isActive) {
+                        val r = clientInput.read(buffer)
+                        if (r == -1) break
+                        if (r > 0) {
+                            val chunk = buffer.copyOfRange(0, r)
+                            relaySession.writeFrame(streamId, CMD_DATA, chunk)
+                        }
+                    }
+                } catch (e: Exception) {
+                    // ignore
+                } finally {
+                    relaySession.writeFrame(streamId, CMD_CLOSE, byteArrayOf())
+                    relaySession.unregisterStream(streamId)
+                }
+            }
+
+            val relayToClientJob = launch {
+                try {
+                    for (chunk in streamContext.incomingQueue) {
+                        clientOutput.write(chunk)
+                        clientOutput.flush()
+                    }
+                } catch (e: Exception) {
+                    // ignore
+                } finally {
+                    try { clientSocket.close() } catch (e: Exception) {}
+                }
+            }
+
             joinAll(clientToRelayJob, relayToClientJob)
 
         } catch (e: Exception) {
             Log.e(TAG, "SOCKS5 client routing error: ${e.message}")
-        } finally {
-            try { relaySocket?.close() } catch (ex: Exception) {}
+            relaySession.writeFrame(streamId, CMD_CLOSE, byteArrayOf())
+            relaySession.unregisterStream(streamId)
+            try {
+                clientOutput.write(byteArrayOf(0x05, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
+                clientOutput.flush()
+            } catch (ex: Exception) {}
         }
     }
 
@@ -223,7 +264,9 @@ class LocalProxyService : Service() {
         clientOutput: OutputStream,
         config: TunnelConfig
     ) = withContext(Dispatchers.IO) {
-        var relaySocket: Socket? = null
+        val streamId = relaySession.registerStream()
+        val streamContext = relaySession.getStream(streamId) ?: return@withContext
+
         try {
             // Read all lines of the HTTP headers
             val headerBytes = readHttpHeader(firstByte, clientInput)
@@ -273,7 +316,6 @@ class LocalProxyService : Service() {
                         targetPort = if (target.startsWith("https://", ignoreCase = true)) 443 else 80
                     }
                 } else {
-                    // Try parsing from Host header
                     for (line in lines) {
                         if (line.startsWith("host:", ignoreCase = true)) {
                             val hostValue = line.substring(5).trim()
@@ -298,60 +340,81 @@ class LocalProxyService : Service() {
                 return@withContext
             }
 
-            Log.i(TAG, "HTTP proxy routing requested: $method $targetHost:$targetPort")
+            Log.i(TAG, "HTTP proxy routing requested: $method $targetHost:$targetPort in multiplexed session")
 
-            // Connect to remote secure TLS/TCP relay
-            val rSocket = try {
-                connectToRelay(config)
-            } catch (e: Exception) {
-                Log.e(TAG, "HTTP pipeline connection to remote relay failed: ${e.message}")
+            // Ensure session is connected
+            relaySession.ensureSession(config)
+
+            // Request egress connection
+            val requestPayload = "$targetHost:$targetPort".toByteArray(Charsets.UTF_8)
+            relaySession.writeFrame(streamId, CMD_CONNECT, requestPayload)
+
+            // Await connection success response
+            val isConnected = withTimeoutOrNull(15000) {
+                streamContext.connectResult.receive()
+            } ?: false
+
+            if (!isConnected) {
+                Log.e(TAG, "Relay rejected handshake or failed to establish egress connection.")
                 clientOutput.write("HTTP/1.1 502 Bad Gateway\r\n\r\n".toByteArray(Charsets.UTF_8))
-                clientOutput.flush()
-                return@withContext
-            }
-            relaySocket = rSocket
-
-            val relayInput = rSocket.getInputStream()
-            val relayOutput = rSocket.getOutputStream()
-
-            // Send target handshake details padded: "targetHost:targetPort"
-            val handshakeBytes = "$targetHost:$targetPort".toByteArray(Charsets.UTF_8)
-            TunnelProtocol.writePaddedData(relayOutput, handshakeBytes, config.paddingAmount)
-
-            // Read target validation reply from remote relay
-            val relayReplyBytes = TunnelProtocol.readPaddedData(relayInput)
-            val relayReply = String(relayReplyBytes, Charsets.UTF_8).trim()
-
-            if (relayReply != "OK") {
-                Log.e(TAG, "Relay rejected target instruction: '$relayReply'")
-                clientOutput.write("HTTP/1.1 502 Bad Gateway (${relayReply})\r\n\r\n".toByteArray(Charsets.UTF_8))
                 clientOutput.flush()
                 return@withContext
             }
 
             // Connection successfully established
             if (method.equals("CONNECT", ignoreCase = true)) {
-                // Return proxy connection success code to browser/client
                 clientOutput.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray(Charsets.UTF_8))
                 clientOutput.flush()
                 Log.i(TAG, "HTTP CONNECT proxy tunnel fully established to '$targetHost:$targetPort'")
             } else {
-                // For non-CONNECT requests (Ordinary GET/POST proxy), pass parsed headers first so raw endpoint handles it
-                relayOutput.write(headerBytes)
-                relayOutput.flush()
-                Log.i(TAG, "HTTP GET/POST header payload forwarded directly to secure relay to '$targetHost:$targetPort'")
+                // Pass parsed headers first
+                relaySession.writeFrame(streamId, CMD_DATA, headerBytes)
+                Log.i(TAG, "HTTP GET/POST header payload forwarded directly over multiplexed session to '$targetHost:$targetPort'")
             }
 
-            // Parallel direct raw stream forwarding loop
-            // If either connection side closes, we close the peer socket to immediately unblock the other read stream
-            val clientToRelayJob = launch { pipeRawStream(clientInput, relayOutput, rSocket) }
-            val relayToClientJob = launch { pipeRawStream(relayInput, clientOutput, clientSocket) }
+            // Coupled raw direct bidirectional forwarding
+            val clientToRelayJob = launch {
+                val buffer = ByteArray(16384)
+                try {
+                    while (isActive) {
+                        val r = clientInput.read(buffer)
+                        if (r == -1) break
+                        if (r > 0) {
+                            val chunk = buffer.copyOfRange(0, r)
+                            relaySession.writeFrame(streamId, CMD_DATA, chunk)
+                        }
+                    }
+                } catch (e: Exception) {
+                    // ignore
+                } finally {
+                    relaySession.writeFrame(streamId, CMD_CLOSE, byteArrayOf())
+                    relaySession.unregisterStream(streamId)
+                }
+            }
+
+            val relayToClientJob = launch {
+                try {
+                    for (chunk in streamContext.incomingQueue) {
+                        clientOutput.write(chunk)
+                        clientOutput.flush()
+                    }
+                } catch (e: Exception) {
+                    // ignore
+                } finally {
+                    try { clientSocket.close() } catch (e: Exception) {}
+                }
+            }
+
             joinAll(clientToRelayJob, relayToClientJob)
 
         } catch (e: Exception) {
             Log.e(TAG, "HTTP Proxy routing error: ${e.message}")
-        } finally {
-            try { relaySocket?.close() } catch (ex: Exception) {}
+            relaySession.writeFrame(streamId, CMD_CLOSE, byteArrayOf())
+            relaySession.unregisterStream(streamId)
+            try {
+                clientOutput.write("HTTP/1.1 502 Bad Gateway\r\n\r\n".toByteArray(Charsets.UTF_8))
+                clientOutput.flush()
+            } catch (ex: Exception) {}
         }
     }
 
@@ -376,7 +439,7 @@ class LocalProxyService : Service() {
         output.toByteArray()
     }
 
-    private suspend fun connectToRelay(config: TunnelConfig): Socket = withContext(Dispatchers.IO) {
+    suspend fun connectToRelay(config: TunnelConfig): Socket = withContext(Dispatchers.IO) {
         if (config.isInsecureByDefault) {
             val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
                 override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
@@ -412,28 +475,6 @@ class LocalProxyService : Service() {
         }
     }
 
-    private suspend fun pipeRawStream(input: InputStream, output: OutputStream, peerSocketToClose: Socket?) {
-        val buffer = ByteArray(32768)
-        try {
-            while (coroutineContext.isActive) {
-                val readBytes = input.read(buffer)
-                if (readBytes == -1) break
-                if (readBytes > 0) {
-                    output.write(buffer, 0, readBytes)
-                    output.flush()
-                }
-            }
-        } catch (e: Exception) {
-            // Stream closed or coroutine cancelled, safe to exit
-        } finally {
-            try {
-                peerSocketToClose?.close()
-            } catch (ex: Exception) {
-                Log.d(TAG, "Error closing peer socket in stream pipe teardown: ${ex.message}")
-            }
-        }
-    }
-
     private fun readExactly(input: InputStream, numBytes: Int): ByteArray {
         val result = ByteArray(numBytes)
         var totalRead = 0
@@ -455,6 +496,7 @@ class LocalProxyService : Service() {
             Log.e(TAG, "Error closing server socket: ${e.message}")
         }
         serverSocket = null
+        relaySession.cleanupSession()
     }
 
     override fun onDestroy() {
@@ -462,60 +504,175 @@ class LocalProxyService : Service() {
         shutdownProxy()
         serviceScope.cancel()
     }
-}
 
-object TunnelProtocol {
-    private val secureRandom = SecureRandom()
-
-    fun writePaddedData(output: OutputStream, data: ByteArray, paddingAmount: Int) {
-        val msgLen = data.size
-        val padLen = if (msgLen > 1024) {
-            0
-        } else if (paddingAmount > 0) {
-            Random.nextInt(0, paddingAmount * 2 + 1)
-        } else {
-            0
-        }
-
-        val header = ByteArray(4)
-        header[0] = ((msgLen ushr 8) and 0xFF).toByte()
-        header[1] = (msgLen and 0xFF).toByte()
-        header[2] = ((padLen ushr 8) and 0xFF).toByte()
-        header[3] = (padLen and 0xFF).toByte()
-
-        output.write(header)
-        output.write(data)
-        if (padLen > 0) {
-            val padding = ByteArray(padLen)
-            secureRandom.nextBytes(padding)
-            output.write(padding)
-        }
-        output.flush()
+    class StreamContext {
+        val connectResult = Channel<Boolean>(1)
+        val incomingQueue = Channel<ByteArray>(Channel.UNLIMITED)
     }
 
-    fun readPaddedData(input: InputStream): ByteArray {
-        val header = ByteArray(4)
-        var readBytes = 0
-        while (readBytes < 4) {
-            val r = input.read(header, readBytes, 4 - readBytes)
-            if (r == -1) return ByteArray(0)
-            readBytes += r
+    class RelaySessionManager(private val service: LocalProxyService) {
+        private var relaySocket: Socket? = null
+        private var relayInput: InputStream? = null
+        private var relayOutput: OutputStream? = null
+        private val nextStreamId = AtomicInteger(1)
+        private val activeStreams = ConcurrentHashMap<Int, StreamContext>()
+        private var readerJob: Job? = null
+
+        @Synchronized
+        fun registerStream(): Int {
+            val id = nextStreamId.getAndIncrement()
+            activeStreams[id] = StreamContext()
+            return id
         }
 
-        val msgLen = ((header[0].toInt() and 0xFF) shl 8) or (header[1].toInt() and 0xFF)
-        val padLen = ((header[2].toInt() and 0xFF) shl 8) or (header[3].toInt() and 0xFF)
+        fun getStream(streamId: Int): StreamContext? = activeStreams[streamId]
 
-        val totalLen = msgLen + padLen
-        val payload = ByteArray(totalLen)
-        var readPayloadBytes = 0
-        while (readPayloadBytes < totalLen) {
-            val r = input.read(payload, readPayloadBytes, totalLen - readPayloadBytes)
-            if (r == -1) return ByteArray(0)
-            readPayloadBytes += r
+        fun unregisterStream(streamId: Int) {
+            activeStreams.remove(streamId)
         }
 
-        val result = ByteArray(msgLen)
-        System.arraycopy(payload, 0, result, 0, msgLen)
-        return result
+        @Synchronized
+        fun ensureSession(config: TunnelConfig) {
+            if (relaySocket != null && relaySocket!!.isConnected && !relaySocket!!.isClosed) {
+                return
+            }
+            
+            cleanupSession()
+            
+            Log.i(TAG, "Establishing single persistent multiplexed session to remote relay at ${config.relayHost}:${config.relayPort}...")
+            try {
+                val socket = runBlocking { service.connectToRelay(config) }
+                relaySocket = socket
+                val input = socket.getInputStream()
+                relayInput = input
+                val output = socket.getOutputStream()
+                relayOutput = output
+
+                // Send SESSION_INIT handshake with padding
+                val initBytes = "SESSION_INIT".toByteArray(Charsets.UTF_8)
+                TunnelProtocol.writePaddedData(output, initBytes, config.paddingAmount)
+
+                // Read SESSION_OK handshake response
+                val responseBytes = TunnelProtocol.readPaddedData(input)
+                val responseStr = String(responseBytes, Charsets.UTF_8).trim()
+                if (responseStr != "SESSION_OK") {
+                    throw Exception("Handshake assertion failed: expected SESSION_OK but received '$responseStr'")
+                }
+
+                Log.i(TAG, "Multiplexed session handshake complete! Session active.")
+
+                readerJob = service.serviceScope.launch {
+                    runReaderLoop(input)
+                }
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to establish multiplexed session to relay: ${e.message}", e)
+                cleanupSession()
+                throw e
+            }
+        }
+
+        private suspend fun runReaderLoop(input: InputStream) = withContext(Dispatchers.IO) {
+            val headerBuffer = ByteArray(9)
+            try {
+                while (isActive) {
+                    readExactlyTo(input, headerBuffer, 9)
+                    
+                    val streamId = (((headerBuffer[0].toInt() and 0xFF) shl 24) or
+                                   ((headerBuffer[1].toInt() and 0xFF) shl 16) or
+                                   ((headerBuffer[2].toInt() and 0xFF) shl 8) or
+                                   (headerBuffer[3].toInt() and 0xFF))
+                    val cmd = headerBuffer[4]
+                    val payloadLen = (((headerBuffer[5].toInt() and 0xFF) shl 24) or
+                                     ((headerBuffer[6].toInt() and 0xFF) shl 16) or
+                                     ((headerBuffer[7].toInt() and 0xFF) shl 8) or
+                                     (headerBuffer[8].toInt() and 0xFF))
+
+                    val payload = if (payloadLen > 0) {
+                        val p = ByteArray(payloadLen)
+                        readExactlyTo(input, p, payloadLen)
+                        p
+                    } else {
+                        ByteArray(0)
+                    }
+
+                    val stream = activeStreams[streamId]
+                    if (stream != null) {
+                        when (cmd) {
+                            CMD_CONNECT_OK -> {
+                                stream.connectResult.trySend(true)
+                            }
+                            CMD_CONNECT_FAIL -> {
+                                stream.connectResult.trySend(false)
+                            }
+                            CMD_DATA -> {
+                                stream.incomingQueue.trySend(payload)
+                            }
+                            CMD_CLOSE -> {
+                                stream.connectResult.trySend(false)
+                                stream.incomingQueue.close()
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Multiplexed relay reader loop ended: ${e.message}")
+            } finally {
+                cleanupSession()
+            }
+        }
+
+        private fun readExactlyTo(input: InputStream, buffer: ByteArray, bytesCount: Int) {
+            var readBytes = 0
+            while (readBytes < bytesCount) {
+                val r = input.read(buffer, readBytes, bytesCount - readBytes)
+                if (r == -1) throw java.io.EOFException("Relay session connection closed unexpectedly")
+                readBytes += r
+            }
+        }
+
+        fun writeFrame(streamId: Int, cmd: Byte, payload: ByteArray) {
+            val out = relayOutput ?: return
+            try {
+                synchronized(out) {
+                    val payloadLen = payload.size
+                    val header = ByteArray(9)
+                    header[0] = ((streamId ushr 24) and 0xFF).toByte()
+                    header[1] = ((streamId ushr 16) and 0xFF).toByte()
+                    header[2] = ((streamId ushr 8) and 0xFF).toByte()
+                    header[3] = (streamId and 0xFF).toByte()
+                    header[4] = cmd
+                    header[5] = ((payloadLen ushr 24) and 0xFF).toByte()
+                    header[6] = ((payloadLen ushr 16) and 0xFF).toByte()
+                    header[7] = ((payloadLen ushr 8) and 0xFF).toByte()
+                    header[8] = (payloadLen and 0xFF).toByte()
+
+                    out.write(header)
+                    if (payloadLen > 0) {
+                        out.write(payload)
+                    }
+                    out.flush()
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Error writing frame: ${e.message}")
+                cleanupSession()
+            }
+        }
+
+        @Synchronized
+        fun cleanupSession() {
+            try { relaySocket?.close() } catch (e: Exception) {}
+            relaySocket = null
+            relayInput = null
+            relayOutput = null
+            readerJob?.cancel()
+            readerJob = null
+            
+            for (stream in activeStreams.values) {
+                stream.connectResult.trySend(false)
+                stream.incomingQueue.close()
+            }
+            activeStreams.clear()
+        }
     }
 }
