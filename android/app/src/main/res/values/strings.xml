@@ -23,7 +23,7 @@
         <b>1. Seamless VPN Mode (Android VPN API):</b>\n
         Redirects all device-wide TCP/UDP traffic through a virtual network interface (TUN). No application-level setup required. Traffic is securely packed, optionally randomized with padding, and relayed directly.\n\n
         <b>2. Localhost HTTP Proxy Mode:</b>\n
-        Starts an in-app HTTP/HTTPS proxy listener bound to Android's localhost (127.0.0.1) on your configured port (default: 19088). You configure your Wi-Fi settings or individual apps (like browsers) to route via 127.0.0.1:19088.\n\n
+        Starts an in-app HTTP/HTTPS proxy listener bound to Android\'s localhost (127.0.0.1) on your configured port (default: 19088). You configure your Wi-Fi settings or individual apps (like browsers) to route via 127.0.0.1:19088.\n\n
         <b>Secure Handsake Padding:</b>\n
         To prevent profiling attacks, handshakes are padded with up to 2x your configured amount. Packets over 1024 bytes skip padding to optimize bandwidth.\n\n
         <b>Insecure Mode (Default: Engaged):</b>\n
