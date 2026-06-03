@@ -101,7 +101,7 @@ You can configure any modern web browser to utilize the tunnel:
 
 ---
 
-## 🔒 Handshake Padding Protocol (v0.0.3)
+## 🔒 Handshake Padding Protocol (v0.0.4)
 
 To defeat traffic analysis attacks, the initial handshake messages are encapsulated inside a custom padded stream:
 
