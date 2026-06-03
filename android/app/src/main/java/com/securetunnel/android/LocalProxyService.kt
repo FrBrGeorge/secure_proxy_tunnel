@@ -30,6 +30,77 @@ const val CMD_DATA: Byte = 4
 const val CMD_CLOSE: Byte = 5
 const val CMD_KEEPALIVE: Byte = 6
 
+object TunnelProtocol {
+    fun writePaddedData(output: OutputStream, data: ByteArray, paddingAmount: Int) {
+        val dataLen = data.size
+        val padLen = if (paddingAmount <= 8) {
+            0
+        } else {
+            Random.nextInt(0, paddingAmount - 8 + 1)
+        }
+        
+        val buffer = java.io.ByteArrayOutputStream()
+        
+        buffer.write((dataLen ushr 24) and 0xFF)
+        buffer.write((dataLen ushr 16) and 0xFF)
+        buffer.write((dataLen ushr 8) and 0xFF)
+        buffer.write(dataLen and 0xFF)
+        
+        buffer.write(data)
+        
+        buffer.write((padLen ushr 24) and 0xFF)
+        buffer.write((padLen ushr 16) and 0xFF)
+        buffer.write((padLen ushr 8) and 0xFF)
+        buffer.write(padLen and 0xFF)
+        
+        if (padLen > 0) {
+            val padBytes = ByteArray(padLen)
+            Random.nextBytes(padBytes)
+            buffer.write(padBytes)
+        }
+        
+        output.write(buffer.toByteArray())
+        output.flush()
+    }
+
+    fun readPaddedData(input: InputStream): ByteArray {
+        val lenBytes = readExactly(input, 4)
+        val payloadLen = (((lenBytes[0].toInt() and 0xFF) shl 24) or
+                          ((lenBytes[1].toInt() and 0xFF) shl 16) or
+                          ((lenBytes[2].toInt() and 0xFF) shl 8) or
+                          (lenBytes[3].toInt() and 0xFF))
+                          
+        val payload = if (payloadLen > 0) {
+            readExactly(input, payloadLen)
+        } else {
+            ByteArray(0)
+        }
+        
+        val padLenBytes = readExactly(input, 4)
+        val padLen = (((padLenBytes[0].toInt() and 0xFF) shl 24) or
+                      ((padLenBytes[1].toInt() and 0xFF) shl 16) or
+                      ((padLenBytes[2].toInt() and 0xFF) shl 8) or
+                      (padLenBytes[3].toInt() and 0xFF))
+                      
+        if (padLen > 0) {
+            readExactly(input, padLen)
+        }
+        
+        return payload
+    }
+
+    private fun readExactly(input: InputStream, numBytes: Int): ByteArray {
+        val result = ByteArray(numBytes)
+        var totalRead = 0
+        while (totalRead < numBytes) {
+            val r = input.read(result, totalRead, numBytes - totalRead)
+            if (r == -1) throw java.io.EOFException("Unexpected end of file reading protocol stream")
+            totalRead += r
+        }
+        return result
+    }
+}
+
 class LocalProxyService : Service() {
 
     companion object {
