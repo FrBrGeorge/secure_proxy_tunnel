@@ -8,7 +8,8 @@ import os
 # Adjust path to import securetunnel modules if running directly
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from securetunnel.local_proxy import handle_proxy_client
+import securetunnel.local_proxy
+from securetunnel.local_proxy import handle_proxy_client, RelaySessionManager
 from securetunnel.remote_relay import handle_relay_client, generate_self_signed_cert
 from securetunnel.common import pad_data, read_padded_data
 
@@ -45,11 +46,18 @@ class TestTunnelInteraction(unittest.IsolatedAsyncioTestCase):
         )
         self.relay_port = self.relay_server.sockets[0].getsockname()[1]
 
-        # 3. Start Local HTTP Proxy Server.
+        # 3. Initialize global session manager
+        securetunnel.local_proxy.session_manager = RelaySessionManager(
+            "127.0.0.1", self.relay_port, insecure=True, padding_amount=0
+        )
+        # Force initial connection creation to simulate actual setup
+        await securetunnel.local_proxy.session_manager.get_connection()
+
+        # 4. Start Local HTTP Proxy Server.
         # It accepts HTTP connections and tunnels them to the secure TLS Relay
         async def run_local_proxy(reader, writer):
             await handle_proxy_client(
-                reader, writer, "127.0.0.1", self.relay_port, insecure=True
+                reader, writer, insecure=True, padding_amount=0
             )
 
         self.proxy_server = await asyncio.start_server(run_local_proxy, "127.0.0.1", 0)
@@ -59,6 +67,8 @@ class TestTunnelInteraction(unittest.IsolatedAsyncioTestCase):
         self.proxy_server.close()
         self.relay_server.close()
         self.target_server.close()
+        if securetunnel.local_proxy.session_manager:
+            await securetunnel.local_proxy.session_manager.reset_connection()
         await asyncio.gather(
             self.proxy_server.wait_closed(),
             self.relay_server.wait_closed(),
@@ -184,6 +194,54 @@ class TestTunnelInteraction(unittest.IsolatedAsyncioTestCase):
         received_data_str = b"".join(self.target_received_data)
         self.assertIn(b"socks-host", received_data_str)
 
+    async def test_multiplex_concurrency(self):
+        """
+        Verify that multiple SOCKS5 connections can trigger egress requests concurrently,
+        successfully sending and receiving data multiplexed over the EXACT same TLS session.
+        """
+        initial_conn = securetunnel.local_proxy.session_manager.conn
+        self.assertIsNotNone(initial_conn)
+        
+        async def make_single_request():
+            reader, writer = await asyncio.open_connection("127.0.0.1", self.proxy_port)
+            
+            # SOCKS5 handshake
+            writer.write(b"\x05\x01\x00")
+            await writer.drain()
+            
+            greet_resp = await reader.readexactly(2)
+            self.assertEqual(greet_resp, b"\x05\x00")
+            
+            ip_parts = [int(p) for p in "127.0.0.1".split(".")]
+            ip_bytes = bytes(ip_parts)
+            port_bytes = self.target_port.to_bytes(2, "big")
+            
+            conn_req = b"\x05\x01\x00\x01" + ip_bytes + port_bytes
+            writer.write(conn_req)
+            await writer.drain()
+            
+            conn_resp = await reader.readexactly(10)
+            self.assertEqual(conn_resp[1], 0)
+            
+            # Write data and read response
+            writer.write(b"GET /multi-test HTTP/1.1\r\nHost: multi-host\r\n\r\n")
+            await writer.drain()
+            
+            response = await reader.read(4096)
+            writer.close()
+            await writer.wait_closed()
+            return response
+
+        # Run 5 requests concurrently
+        results = await asyncio.gather(*(make_single_request() for _ in range(5)))
+        
+        for response in results:
+            self.assertIn(b"HTTP/1.1 200 OK", response)
+            self.assertIn(b"Hello Target", response)
+            
+        # Verify that all 5 requests reused the exact same underlying TLS session
+        self.assertEqual(securetunnel.local_proxy.session_manager.conn, initial_conn)
+
 
 class TestPaddingUtility(unittest.TestCase):
     def test_padding_and_unpadding_behavior(self):
@@ -272,10 +330,16 @@ class TestTunnelInteractionWithPadding(unittest.IsolatedAsyncioTestCase):
         )
         self.relay_port = self.relay_server.sockets[0].getsockname()[1]
 
-        # 3. Start Local HTTP Proxy Server with padding
+        # 3. Initialize global session manager with padding
+        securetunnel.local_proxy.session_manager = RelaySessionManager(
+            "127.0.0.1", self.relay_port, insecure=True, padding_amount=self.padding_amount
+        )
+        await securetunnel.local_proxy.session_manager.get_connection()
+
+        # 4. Start Local HTTP Proxy Server with padding
         async def run_local_proxy(reader, writer):
             await handle_proxy_client(
-                reader, writer, "127.0.0.1", self.relay_port, insecure=True, padding_amount=self.padding_amount
+                reader, writer, insecure=True, padding_amount=self.padding_amount
             )
 
         self.proxy_server = await asyncio.start_server(run_local_proxy, "127.0.0.1", 0)
@@ -285,6 +349,8 @@ class TestTunnelInteractionWithPadding(unittest.IsolatedAsyncioTestCase):
         self.proxy_server.close()
         self.relay_server.close()
         self.target_server.close()
+        if securetunnel.local_proxy.session_manager:
+            await securetunnel.local_proxy.session_manager.reset_connection()
         await asyncio.gather(
             self.proxy_server.wait_closed(),
             self.relay_server.wait_closed(),
