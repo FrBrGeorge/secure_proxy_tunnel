@@ -19,6 +19,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var etRelayHost: EditText
     private lateinit var etRelayPort: EditText
+    private lateinit var lblLocalPort: TextView
     private lateinit var etLocalPort: EditText
     private lateinit var etPaddingAmount: EditText
     private lateinit var cbInsecureMode: CheckBox
@@ -94,7 +95,7 @@ class MainActivity : AppCompatActivity() {
         container.addView(etRelayPort)
 
         // Local Proxy Port Field
-        val lblLocalPort = createLabel(getString(R.string.label_local_port))
+        lblLocalPort = createLabel(getString(R.string.label_local_port))
         etLocalPort = createInputField("19088")
         container.addView(lblLocalPort)
         container.addView(etLocalPort)
@@ -156,6 +157,12 @@ class MainActivity : AppCompatActivity() {
         rgModeSelection.addView(rbVpnMode)
         container.addView(rgModeSelection)
 
+        // Set listener to gray out the "Local proxy port" field if VPN flow is checked
+        rgModeSelection.setOnCheckedChangeListener { _, checkedId ->
+            val isVpn = (checkedId == rbVpnMode.id)
+            updateLocalPortUiState(isVpn)
+        }
+
         // Control Actions Layout (Buttons)
         btnSaveConfig = Button(this).apply {
             text = getString(R.string.label_save_settings)
@@ -215,6 +222,7 @@ class MainActivity : AppCompatActivity() {
 
         // Load configs and pop views
         loadConfigAndPopulate()
+        updateLocalPortUiState(rbVpnMode.isChecked)
 
         // Bind Save Action
         btnSaveConfig.setOnClickListener {
@@ -342,11 +350,34 @@ class MainActivity : AppCompatActivity() {
     private fun lockConfigFields(enable: Boolean) {
         etRelayHost.isEnabled = enable
         etRelayPort.isEnabled = enable
-        etLocalPort.isEnabled = enable
+        etLocalPort.isEnabled = enable && !rbVpnMode.isChecked
         etPaddingAmount.isEnabled = enable
         cbInsecureMode.isEnabled = enable
         rbVpnMode.isEnabled = enable
         rbLocalProxyMode.isEnabled = enable
+        
+        updateLocalPortUiState(rbVpnMode.isChecked)
+    }
+
+    private fun updateLocalPortUiState(isVpn: Boolean) {
+        if (isVpn) {
+            etLocalPort.isEnabled = false
+            etLocalPort.setBackgroundColor(android.graphics.Color.parseColor("#F1F5F9")) // light gray disabled background
+            etLocalPort.setTextColor(android.graphics.Color.parseColor("#94A3B8")) // slate-400 (grayed out text)
+            lblLocalPort.setTextColor(android.graphics.Color.parseColor("#94A3B8")) // slate-400 (grayed out label)
+        } else {
+            val isCurrentlyActive = isTunnelActive
+            etLocalPort.isEnabled = !isCurrentlyActive
+            if (isCurrentlyActive) {
+                etLocalPort.setBackgroundColor(android.graphics.Color.parseColor("#F1F5F9"))
+                etLocalPort.setTextColor(android.graphics.Color.parseColor("#94A3B8"))
+                lblLocalPort.setTextColor(android.graphics.Color.parseColor("#94A3B8"))
+            } else {
+                etLocalPort.setBackgroundColor(android.graphics.Color.parseColor("#E2E8F0"))
+                etLocalPort.setTextColor(android.graphics.Color.parseColor("#1E293B"))
+                lblLocalPort.setTextColor(android.graphics.Color.parseColor("#64748B"))
+            }
+        }
     }
 
     override fun onDestroy() {

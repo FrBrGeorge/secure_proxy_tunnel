@@ -52,9 +52,9 @@ class LocalProxyService : Service() {
         
         proxyJob = serviceScope.launch {
             try {
-                // Bind strictly to localhost (127.0.0.1) to avoid exposing the proxy interface
-                serverSocket = ServerSocket(config.localPort, 50, InetAddress.getByName("127.0.0.1"))
-                Log.i(TAG, "Localhost proxy server listening on 127.0.0.1:${config.localPort}")
+                // Listen on all interfaces so it receives connections from VPN interface (e.g. 10.8.0.2) as well as loopback (127.0.0.1)
+                serverSocket = ServerSocket(config.localPort, 50, InetAddress.getByName("0.0.0.0"))
+                Log.i(TAG, "Proxy server listening on all interfaces at port ${config.localPort}")
 
                 while (isActive) {
                     val clientSocket = serverSocket?.accept() ?: break
