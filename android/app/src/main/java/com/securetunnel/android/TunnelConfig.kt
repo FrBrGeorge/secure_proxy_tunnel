@@ -8,7 +8,8 @@ data class TunnelConfig(
     var relayPort: Int = 19099,
     var localPort: Int = 19088,
     var paddingAmount: Int = 64, // Default changed to 64 bytes as requested
-    var isInsecureByDefault: Boolean = true // Insecure mode default is true as requested
+    var isInsecureByDefault: Boolean = true, // Insecure mode default is true as requested
+    var isVpnMode: Boolean = true
 ) {
     companion object {
         private const val PREFS_NAME = "secure_tunnel_prefs"
@@ -17,6 +18,7 @@ data class TunnelConfig(
         private const val KEY_LOCAL_PORT = "local_port"
         private const val KEY_PADDING_AMOUNT = "padding_amount"
         private const val KEY_INSECURE_MODE = "insecure_mode"
+        private const val KEY_VPN_MODE = "vpn_mode"
 
         fun load(context: Context): TunnelConfig {
             val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -25,7 +27,8 @@ data class TunnelConfig(
                 relayPort = prefs.getInt(KEY_RELAY_PORT, 19099),
                 localPort = prefs.getInt(KEY_LOCAL_PORT, 19088),
                 paddingAmount = prefs.getInt(KEY_PADDING_AMOUNT, 64),
-                isInsecureByDefault = prefs.getBoolean(KEY_INSECURE_MODE, true) // True by default
+                isInsecureByDefault = prefs.getBoolean(KEY_INSECURE_MODE, true), // True by default
+                isVpnMode = prefs.getBoolean(KEY_VPN_MODE, true) // True by default
             )
         }
     }
@@ -38,6 +41,7 @@ data class TunnelConfig(
             putInt(KEY_LOCAL_PORT, localPort)
             putInt(KEY_PADDING_AMOUNT, paddingAmount)
             putBoolean(KEY_INSECURE_MODE, isInsecureByDefault)
+            putBoolean(KEY_VPN_MODE, isVpnMode)
             apply()
         }
     }

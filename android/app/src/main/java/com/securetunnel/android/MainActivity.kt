@@ -151,7 +151,6 @@ class MainActivity : AppCompatActivity() {
         rbLocalProxyMode = RadioButton(this).apply {
             text = "Localhost HTTP Proxy"
             id = android.view.View.generateViewId()
-            isChecked = true // Starting with localhost proxy
         }
         rgModeSelection.addView(rbLocalProxyMode)
         rgModeSelection.addView(rbVpnMode)
@@ -269,6 +268,11 @@ class MainActivity : AppCompatActivity() {
         etLocalPort.setText(activeConfig.localPort.toString())
         etPaddingAmount.setText(activeConfig.paddingAmount.toString())
         cbInsecureMode.isChecked = activeConfig.isInsecureByDefault
+        if (activeConfig.isVpnMode) {
+            rbVpnMode.isChecked = true
+        } else {
+            rbLocalProxyMode.isChecked = true
+        }
     }
 
     private fun saveConfigFromViews() {
@@ -277,6 +281,7 @@ class MainActivity : AppCompatActivity() {
         activeConfig.localPort = etLocalPort.text.toString().toIntOrNull() ?: 19088
         activeConfig.paddingAmount = etPaddingAmount.text.toString().toIntOrNull() ?: 64
         activeConfig.isInsecureByDefault = cbInsecureMode.isChecked
+        activeConfig.isVpnMode = rbVpnMode.isChecked
         activeConfig.save(this)
     }
 

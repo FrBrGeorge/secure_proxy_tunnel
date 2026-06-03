@@ -30,12 +30,45 @@ jobs:
         run: |
           cd secure_tunnel_project && python -m build
 
+      - name: Set up JDK 17 for Android
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Grant Execute Permission to Gradle Wrapper
+        run: |
+          cd android
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+          else
+            echo "Init gradlew if not found..."
+            gradle wrapper --gradle-version 8.4
+            chmod +x gradlew
+          fi
+
+      - name: Compile and Assemble Android APKs
+        run: |
+          cd android
+          ./gradlew assembleRelease assembleDebug --no-daemon
+          mkdir -p ../dist-apk
+          # Copy release unsigned APK
+          if [ -f app/build/outputs/apk/release/app-release-unsigned.apk ]; then
+            cp app/build/outputs/apk/release/app-release-unsigned.apk ../dist-apk/secure-tunnel-android-release-unsigned.apk
+          fi
+          # Also copy debug APK as it is signed with debug key and easily installable on any Android device
+          if [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
+            cp app/build/outputs/apk/debug/app-debug.apk ../dist-apk/secure-tunnel-android-debug.apk
+          fi
+
       - name: Create GitHub Release and Upload Assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
             secure_tunnel_project/dist/*.whl
             secure_tunnel_project/dist/*.tar.gz
+            dist-apk/*.apk
           draft: false
           prerelease: false
           generate_release_notes: true
