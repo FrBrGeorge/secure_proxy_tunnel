@@ -58,6 +58,12 @@ class LocalProxyService : Service() {
 
                 while (isActive) {
                     val clientSocket = serverSocket?.accept() ?: break
+                    try {
+                        clientSocket.keepAlive = true
+                        clientSocket.tcpNoDelay = true
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to configure TCP settings on client socket: ${e.message}")
+                    }
                     launch {
                         handleClientConnection(clientSocket, config)
                     }
@@ -198,8 +204,9 @@ class LocalProxyService : Service() {
             Log.i(TAG, "SOCKS5 proxy tunnel fully interconnected to '$targetHost:$targetPort'")
 
             // Coupled raw direct bidirectional forwarding
-            val clientToRelayJob = launch { pipeRawStream(clientInput, relayOutput) }
-            val relayToClientJob = launch { pipeRawStream(relayInput, clientOutput) }
+            // If either connection side closes, we close the peer socket to immediately unblock the other read stream
+            val clientToRelayJob = launch { pipeRawStream(clientInput, relayOutput, rSocket) }
+            val relayToClientJob = launch { pipeRawStream(relayInput, clientOutput, clientSocket) }
             joinAll(clientToRelayJob, relayToClientJob)
 
         } catch (e: Exception) {
@@ -336,8 +343,9 @@ class LocalProxyService : Service() {
             }
 
             // Parallel direct raw stream forwarding loop
-            val clientToRelayJob = launch { pipeRawStream(clientInput, relayOutput) }
-            val relayToClientJob = launch { pipeRawStream(relayInput, clientOutput) }
+            // If either connection side closes, we close the peer socket to immediately unblock the other read stream
+            val clientToRelayJob = launch { pipeRawStream(clientInput, relayOutput, rSocket) }
+            val relayToClientJob = launch { pipeRawStream(relayInput, clientOutput, clientSocket) }
             joinAll(clientToRelayJob, relayToClientJob)
 
         } catch (e: Exception) {
@@ -378,25 +386,33 @@ class LocalProxyService : Service() {
             val sslContext = SSLContext.getInstance("TLS")
             sslContext.init(null, trustAllCerts, SecureRandom())
             val socketFactory = sslContext.socketFactory
-            val rawSocket = Socket()
+            val rawSocket = Socket().apply {
+                keepAlive = true
+                tcpNoDelay = true
+            }
             VpnModeService.protectSocket(rawSocket)
             rawSocket.connect(java.net.InetSocketAddress(config.relayHost, config.relayPort), 10000)
             
             val sslSocket = socketFactory.createSocket(rawSocket, config.relayHost, config.relayPort, true) as SSLSocket
+            sslSocket.keepAlive = true
             sslSocket.startHandshake()
             sslSocket
         } else {
-            val rawSocket = Socket()
+            val rawSocket = Socket().apply {
+                keepAlive = true
+                tcpNoDelay = true
+            }
             VpnModeService.protectSocket(rawSocket)
             rawSocket.connect(java.net.InetSocketAddress(config.relayHost, config.relayPort), 10000)
             val sslSocketFactory = javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory
             val sslSocket = sslSocketFactory.createSocket(rawSocket, config.relayHost, config.relayPort, true) as SSLSocket
+            sslSocket.keepAlive = true
             sslSocket.startHandshake()
             sslSocket
         }
     }
 
-    private suspend fun pipeRawStream(input: InputStream, output: OutputStream) {
+    private suspend fun pipeRawStream(input: InputStream, output: OutputStream, peerSocketToClose: Socket?) {
         val buffer = ByteArray(32768)
         try {
             while (coroutineContext.isActive) {
@@ -409,6 +425,12 @@ class LocalProxyService : Service() {
             }
         } catch (e: Exception) {
             // Stream closed or coroutine cancelled, safe to exit
+        } finally {
+            try {
+                peerSocketToClose?.close()
+            } catch (ex: Exception) {
+                Log.d(TAG, "Error closing peer socket in stream pipe teardown: ${ex.message}")
+            }
         }
     }
 

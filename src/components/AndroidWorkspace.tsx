@@ -15,6 +15,7 @@ export default function AndroidWorkspace() {
   const [operationMode, setOperationMode] = useState<"vpn" | "localhost">("localhost");
   
   // App active statuses
+  const [apkUrl, setApkUrl] = useState("");
   const [isTunnelActive, setIsTunnelActive] = useState(false);
   const [activeTab, setActiveTab] = useState<"app" | "help" | "diagrams">("app");
   const [logs, setLogs] = useState<string[]>([]);
@@ -33,6 +34,10 @@ export default function AndroidWorkspace() {
     const savedPadding = localStorage.getItem("android_padding_amount");
     const savedInsecure = localStorage.getItem("android_insecure_mode");
     const savedMode = localStorage.getItem("android_operation_mode");
+
+    if (typeof window !== "undefined") {
+      setApkUrl(window.location.origin + "/api/proxy/download-apk");
+    }
 
     if (savedHost) setRelayHost(savedHost);
     if (savedRelayPort) setRelayPort(parseInt(savedRelayPort));
@@ -399,35 +404,31 @@ export default function AndroidWorkspace() {
                       exit={{ opacity: 0, x: 10 }}
                       className="flex-1 flex flex-col text-left space-y-4"
                     >
-                      <div className="bg-slate-950/40 p-3 rounded-lg border border-slate-850 leading-relaxed text-slate-300">
+                      <div className="bg-slate-950/40 p-3 rounded-lg border border-slate-850 leading-relaxed text-slate-350">
                         <h4 className="text-xs font-bold text-teal-400 border-b border-slate-800 pb-1.5 flex items-center gap-1">
-                          <Info className="h-3.5 w-3.5" /> Core Android Operation Guide
+                          <Info className="h-3.5 w-3.5" /> Secure Tunnel Guide
                         </h4>
                         
-                        <div className="text-[10px] space-y-3 mt-3 overflow-y-auto max-h-[360px] pr-1 scrollbar-thin">
+                        <div className="text-[10px] space-y-3 mt-3 overflow-y-auto max-h-[350px] pr-1 scrollbar-thin">
                           <div>
-                            <strong className="text-slate-200 block text-[11px] mb-0.5">🚀 1. Setup Client Options</strong>
-                            Configure the remote IP address and matching secure TCP listener Relay ports. Your Android Client leverages <strong className="text-teal-400">SharedPreferences</strong> to keep settings saved safely across reboots. Click <strong>"Save Settings"</strong> to persist setup records.
+                            <strong className="text-slate-200 block text-[11px] mb-0.5">💡 What is Secure Tunnel?</strong>
+                            Secure Tunnel encrypts and routes your connection through a remote server. This lets you browse privately and access blocked websites/apps.
                           </div>
 
                           <div>
-                            <strong className="text-slate-200 block text-[11px] mb-0.5">🔒 2. Default Insecure Safe Mode</strong>
-                            By default, <strong className="text-teal-400">Insecure Mode (No Certificate Checks)</strong> is turned ON to allow fast evaluation setups with self-signed development certificates. Simply configure it via the checkbox. Turn it OFF for strict chain check validation.
+                            <strong className="text-slate-200 block text-[11px] mb-0.5">🚀 Option A: Android VPN Mode (Recommended)</strong>
+                            Intercepts the entire system traffic. Set Capture Mode to <b>Android VPN</b>, enter the Server IP/Port, tap <b>Connect Tunnel</b>, and authorize permissions when prompted.
                           </div>
 
                           <div>
-                            <strong className="text-slate-200 block text-[11px] mb-0.5">⚙️ 3. Seamless VPN Mode</strong>
-                            When toggled to VPN, starting connection triggers Android\'s native <code className="text-teal-400 bg-slate-950 px-1 py-0.5 rounded font-mono">VpnService</code> interface prompts. Directs all outgoing TCP payload packets seamlessly inside an encrypted tunnel. This mode is fully system-authoritative.
+                            <strong className="text-slate-200 block text-[11px] mb-0.5">⚙️ Option B: Localhost Proxy Mode</strong>
+                            Set Capture Mode to <b>Local Proxy</b>, tap <b>Connect</b>, then configure specific apps (browsers, Telegram, Wi-Fi) to route via:<br/>
+                            <span className="text-[9px] text-teal-400 font-mono block mt-0.5 pl-2">• IP: 127.0.0.1 • Port: {localPort}</span>
                           </div>
 
                           <div>
-                            <strong className="text-slate-200 block text-[11px] mb-0.5">📌 4. Localhost HTTP Proxy Mode</strong>
-                            Launches an inside-app HTTP Proxy listener strictly bound to <code className="text-teal-400 bg-slate-950 px-1 py-0.5 rounded font-mono">127.0.0.1:19088</code>. You manually input this proxy in browser network profiles or connection endpoints routing through localhost loops.
-                          </div>
-
-                          <div>
-                            <strong className="text-slate-200 block text-[11px] mb-0.5">📦 5. Handshake Random Padding</strong>
-                            Features randomized handshake padding (Default: 64 bytes) to defend against traffic-profiling analytics. Small messages (such as headers) are heavily padded, while bulky message packets above 1024 bytes bypass padding automatically to conserve data.
+                            <strong className="text-slate-200 block text-[11px] mb-0.5">🔒 Insecure Mode</strong>
+                            Keep <b>checked</b> if using a self-signed development certificate (bypasses check). Uncheck for verified production servers.
                           </div>
                         </div>
                       </div>
@@ -602,6 +603,45 @@ export default function AndroidWorkspace() {
                   </div>
                 </li>
               </ul>
+            </div>
+          </div>
+
+          {/* Release APK Download & QR Code Section */}
+          <div className="bg-slate-900 border border-slate-800/80 rounded-xl p-5 flex flex-col md:flex-row items-center gap-6" id="release_apk_card">
+            <div className="flex-1 text-left space-y-3">
+              <div className="flex items-center gap-2">
+                <Smartphone className="h-5 w-5 text-teal-400" />
+                <h3 className="text-sm font-bold text-slate-200">Download Android App APK</h3>
+              </div>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Scan the QR code with your mobile device or click the button below to download and install the latest compiled client APK direct to your phone.
+              </p>
+              <div className="flex flex-wrap gap-3 pt-1">
+                <a 
+                  href="/api/proxy/download-apk" 
+                  download="secure-tunnel-android.apk"
+                  id="btn_download_apk"
+                  className="inline-flex items-center gap-2 py-2 px-4 rounded-lg bg-teal-500 text-slate-950 text-xs font-bold hover:bg-teal-400 shadow-lg shadow-teal-500/10 transition-all select-none cursor-pointer"
+                >
+                  <Download className="h-3.5 w-3.5" /> Download Release APK
+                </a>
+                <span className="text-[10px] font-mono text-slate-500 self-center">v0.0.3 (SecureTunnelVPN)</span>
+              </div>
+            </div>
+            
+            {/* QR Code Graphic Frame */}
+            <div className="bg-slate-950 border border-slate-850 p-3.5 rounded-lg flex flex-col items-center gap-1.5 shadow-inner">
+              {apkUrl ? (
+                <img 
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=120x120&color=2dd4bf&bgcolor=0f172a&data=${encodeURIComponent(apkUrl)}`}
+                  alt="Release APK QR Code"
+                  referrerPolicy="no-referrer"
+                  className="w-28 h-28 rounded shadow border border-slate-800/60"
+                />
+              ) : (
+                <div className="w-28 h-28 rounded bg-slate-900 flex items-center justify-center text-[10px] text-slate-500">Generating...</div>
+              )}
+              <span className="text-[9px] font-bold text-teal-400 uppercase tracking-widest leading-none mt-1">Scan to Install</span>
             </div>
           </div>
 

@@ -3,6 +3,7 @@ import ssl
 import sys
 import argparse
 import logging
+import socket
 
 from securetunnel.common import pad_data, read_padded_data
 
@@ -13,6 +14,18 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger("securetunnel-local")
+
+def setup_socket_options(writer):
+    try:
+        sock = writer.get_extra_info('socket')
+        if sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            try:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 async def forward_stream(src_reader, dest_writer, direction_tag):
     try:
@@ -33,6 +46,7 @@ async def forward_stream(src_reader, dest_writer, direction_tag):
 
 async def handle_socks5(reader, writer, relay_host, relay_port, insecure, padding_amount=0):
     peer = writer.get_extra_info('peername')
+    relay_writer = None
     try:
         # Read the remaining auth methods count
         nmethods_bytes = await reader.readexactly(1)
@@ -89,6 +103,7 @@ async def handle_socks5(reader, writer, relay_host, relay_port, insecure, paddin
             relay_reader, relay_writer = await asyncio.open_connection(
                 relay_host, relay_port, ssl=ssl_context
             )
+            setup_socket_options(relay_writer)
             logger.info(f"SOCKS5 conduit connected to secure remote relay {relay_host}:{relay_port}")
         except Exception as e:
             logger.error(f"SOCKS5 egress connection to relay failed: {e}")
@@ -124,12 +139,20 @@ async def handle_socks5(reader, writer, relay_host, relay_port, insecure, paddin
         logger.info(f"SOCKS5 proxy tunnel fully interconnected to '{host}:{port}'")
         
         # Coupled forwarding
-        await asyncio.gather(
-            forward_stream(reader, relay_writer, "socks5 client -> relay"),
-            forward_stream(relay_reader, writer, "relay -> socks5 client")
-        )
+        t1 = asyncio.create_task(forward_stream(reader, relay_writer, "socks5 client -> relay"))
+        t2 = asyncio.create_task(forward_stream(relay_reader, writer, "relay -> socks5 client"))
+        await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
+        t1.cancel()
+        t2.cancel()
     except Exception as e:
         logger.error(f"Exception encountered in handling SOCKS5 flow from {peer}: {e}")
+    finally:
+        if relay_writer:
+            try:
+                relay_writer.close()
+                await relay_writer.wait_closed()
+            except Exception:
+                pass
 
 async def handle_http(first_byte, reader, writer, relay_host, relay_port, insecure, padding_amount=0):
     peer = writer.get_extra_info('peername')
@@ -214,6 +237,7 @@ async def handle_http(first_byte, reader, writer, relay_host, relay_port, insecu
             relay_reader, relay_writer = await asyncio.open_connection(
                 relay_host, relay_port, ssl=ssl_context
             )
+            setup_socket_options(relay_writer)
             logger.info(f"HTTP proxy pipeline connected to secure remote relay {relay_host}:{relay_port}")
         except Exception as e:
             logger.error(f"HTTP proxy egress connection to secure remote relay failed: {e}")
@@ -254,10 +278,11 @@ async def handle_http(first_byte, reader, writer, relay_host, relay_port, insecu
             logger.info(f"HTTP GET/POST header payload forwarded directly to secure relay to '{host}:{port}'")
 
         # Coupled forwarding
-        await asyncio.gather(
-            forward_stream(reader, relay_writer, "http client -> relay"),
-            forward_stream(relay_reader, writer, "relay -> http client")
-        )
+        t1 = asyncio.create_task(forward_stream(reader, relay_writer, "http client -> relay"))
+        t2 = asyncio.create_task(forward_stream(relay_reader, writer, "relay -> http client"))
+        await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
+        t1.cancel()
+        t2.cancel()
     except Exception as e:
          logger.error(f"General exception encountered in handling HTTP proxy client: {e}")
     finally:
@@ -271,6 +296,7 @@ async def handle_http(first_byte, reader, writer, relay_host, relay_port, insecu
 async def handle_proxy_client(reader, writer, relay_host, relay_port, insecure, padding_amount=0):
     peer = writer.get_extra_info('peername')
     logger.info(f"Local connection from client {peer}")
+    setup_socket_options(writer)
     
     try:
         # Pre-read the first byte of incoming traffic to inspect request type/protocol

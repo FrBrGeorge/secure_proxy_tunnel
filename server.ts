@@ -372,6 +372,46 @@ app.get("/api/proxy/download-zip", (req, res) => {
   });
 });
 
+// Endpoint: Download the compiled Android APK
+app.get("/api/proxy/download-apk", (req, res) => {
+  const possiblePaths = [
+    path.join(process.cwd(), "android", "app", "build", "outputs", "apk", "debug", "app-debug.apk"),
+    path.join(process.cwd(), "android", "app", "build", "outputs", "apk", "release", "app-release.apk"),
+    path.join(process.cwd(), "android", "app", "build", "outputs", "apk", "release", "app-release-unsigned.apk")
+  ];
+
+  let foundPath = "";
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+      foundPath = p;
+      break;
+    }
+  }
+
+  if (foundPath) {
+    res.download(foundPath, "secure-tunnel-android.apk");
+  } else {
+    res.status(404).send(
+      `<html>
+        <head><title>Secure Tunnel - APK Download</title></head>
+        <body style="font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #cbd5e1; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; padding: 20px; text-align: center;">
+          <div style="background: #1e293b; max-width: 500px; padding: 40px; border-radius: 12px; border: 1px solid #334155; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);">
+            <div style="font-size: 48px; margin-bottom: 20px;">📱</div>
+            <h2 style="color: #f8fafc; margin-top: 0; font-size: 20px;">APK Not Found in Sandboxed Container</h2>
+            <p style="font-size: 14px; line-height: 1.6; color: #94a3b8;">
+              The Android companion app has not been compiled inside this runtime environment container, so there is no local APK available at this moment.
+            </p>
+            <p style="font-size: 14px; line-height: 1.6; color: #94a3b8;">
+              Since this is a full-featured Android project, you can push changes to your GitHub fork 
+              to automatically trigger the <strong>GitHub Actions CI builder</strong> (<span style="color: #2dd4bf; font-family: monospace;">.github/workflows/android.yml</span>) which will build your production-ready high-performance APK instantly!
+            </p>
+          </div>
+        </body>
+      </html>`
+    );
+  }
+});
+
 // Endpoint: Run Python automated integration tests suite
 app.post("/api/proxy/run-python-tests", (req, res) => {
   const projectRoot = process.cwd();

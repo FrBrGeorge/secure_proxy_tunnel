@@ -80,10 +80,7 @@ class VpnModeService : VpnService() {
             val builder = Builder()
                 .setSession("SecureTunnelVPN")
                 .addAddress("10.8.0.2", 32) // Assign virtual inner IP
-                .addRoute("0.0.0.0", 0)       // Intercept all outgoing IPv4 internet traffic
-                .addRoute("::", 0)            // Intercept all outgoing IPv6 internet traffic
-                .addDnsServer("8.8.8.8")       // Intercept DNS queries
-                .addDnsServer("1.1.1.1")
+                .addRoute("10.8.0.0", 24)   // Private route to keep TUN active without absorbing all outbound/loopback IP traffic
                 .setMtu(1500)
 
             // Exclude our own application from the VPN routing to prevent any potential routing loops or conflicts

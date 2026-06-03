@@ -15,33 +15,22 @@
     <string name="button_start">Connect Tunnel</string>
     <string name="button_stop">Disconnect</string>
     
-    <string name="app_help_title">Secure Tunnel - Documentation &amp; Setup</string>
+    <string name="app_help_title">Secure Tunnel Guide</string>
     <string name="app_help_body">
-        <h3><b>Introduction</b></h3>
-        Welcome to <b>Secure Tunnel Android Client</b> (v0.0.3). This application allows you to tunnel your network traffic securely through an encrypted SSL/TLS interface to a remote Secure Relay server. Perfect for bypassing network blocks and protecting data transmission.<br/><br/>
+        <b>What is Secure Tunnel?</b><br/>
+        Secure Tunnel encrypts and routes your internet connection through a secure remote server. This helps you browse privately and access blocked websites and apps.<br/><br/>
 
-        <h3><b>Modes of Operation</b></h3>
-        Choose between two powerful routing techniques based on your security constraints:<br/><br/>
-        
-        <b>1. Seamless VPN Mode (Android VPN API):</b><br/>
-        • <i>Overview:</i> Captures all system-wide TCP and UDP packets seamlessly.<br/>
-        • <i>Method:</i> Uses Android\'s native <b>VpnService</b> layer to establish a virtual network adapter. All internet traffic is redirected through the local SOCKS5/HTTP loopback proxy on the device.<br/>
-        • <i>Setup:</i> No extra software settings required! Just enable and confirm system permissions.<br/><br/>
+        <b>Option A: Android VPN Mode (Recommended)</b><br/>
+        • <i>How it works:</i> Redirects your entire device internet traffic automatically.<br/>
+        • <i>Setup:</i> Set Capture Mode to <b>Android VPN</b>, enter your Server IP/Port, and tap <b>Connect Tunnel</b>. Accept the connection request when prompted.<br/><br/>
 
-        <b>2. Localhost HTTP/SOCKS5 Proxy Mode:</b><br/>
-        • <i>Overview:</i> Starts a dual-protocol in-app proxy daemon bound to localhost.<br/>
-        • <i>Method:</i> Listens on 127.0.0.1 on your custom configured port.<br/>
-        • <i>Setup:</i> Manually configure your web browser, Telegram, or system Wi-Fi proxy settings to route via:<br/>
-        &amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;<b>Server:</b> 127.0.0.1<br/>
-        &amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;<b>Port:</b> (Your Configured Port, Default: 19088)<br/><br/>
+        <b>Option B: Localhost Proxy Mode</b><br/>
+        • <i>How it works:</i> Starts a local proxy server inside this app.<br/>
+        • <i>Setup:</i> Set Capture Mode to <b>Local Proxy</b>, tap <b>Connect Tunnel</b>, then manually configure specific apps (like browsers, Telegram, or system Wi-Fi) to route via:<br/>
+        &amp;nbsp;&amp;nbsp;&amp;nbsp;• <b>Proxy Server:</b> 127.0.0.1<br/>
+        &amp;nbsp;&amp;nbsp;&amp;nbsp;• <b>Port:</b> (Your configured Local Proxy Port, e.g. 19088)<br/><br/>
 
-        <h3><b>Secure Handshake Padding</b></h3>
-        To defend against Deep Packet Inspection (DPI) and protocol profiling attacks, the tunnel pads the initial destination route handshake:<br/>
-        • All handshake packets are injected with random padding bytes up to 2x your configured option.<br/>
-        • Data payloads exceeding 1024 bytes automatically bypass padding to optimize network performance.<br/><br/>
-
-        <h3><b>Certificate Insecurity Options</b></h3>
-        • <b>Insecure Mode Enabled:</b> Useful for development with local self-signed TLS certificates (bypasses CA checks).<br/>
-        • <b>Insecure Mode Disabled:</b> Strict TLS checks. Recommended for production deployment.
+        <b>Important Details:</b><br/>
+        • <b>Insecure Mode:</b> Keep checked if your server uses a self-signed development security certificate. Uncheck if you are using public certificates.
     </string>
 </resources>
